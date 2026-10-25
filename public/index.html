@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sutra — Research Study Desk</title>
+<link rel="stylesheet" href="/public/styles.css">
+</head>
+<body>
+<header>
+  <h1>SUTRA</h1>
+  <p class="sub">Research Study Desk — open a sutra, OCR it, translate it</p>
+  <div id="tools" class="tools"></div>
+</header>
+<main>
+  <section class="panel" id="library">
+    <h2>Library</h2>
+    <form id="upload">
+      <input id="up-title" type="text" placeholder="Title (optional — defaults to filename)">
+      <select id="up-lang">
+        <option value="bod">Tibetan</option>
+        <option value="san">Sanskrit</option>
+        <option value="bod+san">Tibetan or Sanskrit</option>
+      </select>
+      <input id="up-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.gif">
+      <p class="hint">One PDF, or a batch of page images (one page per image).</p>
+      <button type="submit">Add to library</button>
+    </form>
+    <ul id="doc-list"></ul>
+    <h2>Settings</h2>
+    <form id="settings">
+      <label>Ollama URL
+        <input id="set-url" type="text" placeholder="http://localhost:11434">
+      </label>
+      <label>Model
+        <select id="set-model"><option value="">— no model selected —</option></select>
+        <button type="button" id="refresh-models">Refresh list</button>
+      </label>
+      <p class="hint">Models come from your Ollama — nothing is downloaded by this desk. Pick an installed multilingual model.</p>
+      <button type="submit">Save settings</button>
+    </form>
+  </section>
+  <section class="panel" id="desk">
+    <p class="empty">Pick a sutra from the library, or add one.</p>
+  </section>
+</main>
+<p id="msg"></p>
+<script src="/public/app.js"></script>
+</body>
+</html>
