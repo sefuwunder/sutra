@@ -56,6 +56,16 @@ defaults. The desk binds 127.0.0.1 only.
   still serve a manifest (a 40-page extract), so they are shown but
   never imported. OCR language is guessed from the volume's script
   (Tibetan → bod, Devanagari → san).
+- **DharmaNexus corpora**: browse the Pāli (4,258 texts), Sanskrit and
+  Chinese (49,211 juan entries) corpora the Dharmamitra project publishes
+  on GitHub under public-domain / Creative Commons licensing, and import
+  a text as text pages — no OCR needed, ready to translate. The corpus
+  filename IS the Dharmamitra reader id, so every imported page links to
+  its exact passage on Dharmamitra (`/db/{pa,sa,zh}/{filename}/text`).
+  The desk deliberately does NOT call the Dharmamitra API: its Terms of
+  Service forbid using it to populate third-party applications. Tibetan
+  has no public corpus repo under this scheme, so it is not listed here
+  (BDRC covers Tibetan scans).
 
 ## Tool setup (on the machine that runs the desk)
 
@@ -98,9 +108,12 @@ sudo apt-get install -y poppler-utils
 | `GET /api/datasources/bdrc/work?id=…` | BDRC work: volumes + access |
 | `GET /api/datasources/bdrc/volume?id=…` | BDRC volume: access + manifest + pages |
 | `POST /api/datasources/bdrc/import` | Import one open volume (`{volume, title, ocr_lang}`) |
+| `GET /api/datasources/corpus/catalog?lang=pa\|sa\|zh` | DharmaNexus corpus catalogue (cached 1h) |
+| `GET /api/datasources/corpus/text?lang=…&file=…` | One corpus text: metadata + segment count + preview |
+| `POST /api/datasources/corpus/import` | Import a corpus text (`{lang, file, title}`) as text pages |
 
 ## Tests
 
 ```sh
-bun test   # 24 tests: db, OCR args, Ollama client with stubbed fetch, IIIF parsing + URL allowlists, BDRC search/volumes/access
+bun test   # 32 tests: db, OCR args, Ollama client with stubbed fetch, IIIF parsing + URL allowlists, BDRC search/volumes/access, corpus catalog/segments/chunking/allowlist/cache
 ```

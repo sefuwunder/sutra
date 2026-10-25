@@ -121,7 +121,7 @@ function renderDesk() {
     a.href = doc.source_url;
     a.target = "_blank";
     a.rel = "noreferrer";
-    a.textContent = "manifest";
+    a.textContent = doc.source_type === "text" ? "Dharmamitra reader" : "manifest";
     src.append(a);
     desk.append(src);
   }
@@ -196,6 +196,18 @@ function renderDesk() {
     emb.type = "application/pdf";
     emb.className = "pdf-view";
     desk.append(emb);
+  }
+
+  if (page.source_ref) {
+    const ref = document.createElement("p");
+    ref.className = "hint";
+    const a = document.createElement("a");
+    a.href = page.source_ref;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    a.textContent = "Open this passage on Dharmamitra";
+    ref.append(a);
+    desk.append(ref);
   }
 
   const srcLabel = document.createElement("h3");
@@ -446,6 +458,171 @@ async function openDsDetail(manifest, fallbackTitle) {
 }
 
 $("ds-utokyo").addEventListener("click", openDatasource);
+
+// ---- Datasources: DharmaNexus corpora (GitHub, public domain / CC) ----
+// The desk never calls the Dharmamitra API (its terms forbid feeding
+// third-party apps); it reads the project's public GitHub corpora and
+// links each imported page back to the Dharmamitra reader.
+let corpusItems = [];
+let corpusLang = "pa";
+const CORPUS_LABELS = { pa: "Pāli", sa: "Sanskrit", zh: "Chinese" };
+
+function corpusView() {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = "DharmaNexus corpora";
+  desk.append(h);
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Full texts from the DharmaNexus GitHub corpora (public domain / CC). Imported as text pages — no OCR needed — each page links to its exact passage on Dharmamitra. Tibetan has no public corpus repo, so it is not listed here.";
+  desk.append(hint);
+  const nav = document.createElement("div");
+  nav.className = "nav";
+  for (const lang of ["pa", "sa", "zh"]) {
+    const b = document.createElement("button");
+    b.textContent = CORPUS_LABELS[lang];
+    b.disabled = lang === corpusLang;
+    b.onclick = () => { corpusLang = lang; corpusView(); };
+    nav.append(b);
+  }
+  desk.append(nav);
+  const loading = document.createElement("p");
+  loading.className = "hint";
+  loading.textContent = "Loading the catalogue… (the Chinese catalogue is large; first load takes a while)";
+  desk.append(loading);
+  api(`/api/datasources/corpus/catalog?lang=${corpusLang}`)
+    .then((data) => {
+      corpusItems = data.items;
+      renderCorpusList("");
+    })
+    .catch((e) => {
+      loading.textContent = "";
+      showMsg(e.message, true);
+    });
+}
+
+function renderCorpusList(filter) {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = `DharmaNexus corpora — ${CORPUS_LABELS[corpusLang]}`;
+  desk.append(h);
+  const nav = document.createElement("div");
+  nav.className = "nav";
+  for (const lang of ["pa", "sa", "zh"]) {
+    const b = document.createElement("button");
+    b.textContent = CORPUS_LABELS[lang];
+    b.disabled = lang === corpusLang;
+    b.onclick = () => { corpusLang = lang; corpusView(); };
+    nav.append(b);
+  }
+  desk.append(nav);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "Filter by title, reference, or filename…";
+  input.value = filter;
+  input.oninput = () => renderCorpusList(input.value);
+  desk.append(input);
+  const q = filter.trim().toLowerCase();
+  const shown = q
+    ? corpusItems.filter((it) =>
+        (it.displayName || "").toLowerCase().includes(q) ||
+        (it.textname || "").toLowerCase().includes(q) ||
+        (it.filename || "").toLowerCase().includes(q) ||
+        (it.collection || "").toLowerCase().includes(q))
+    : corpusItems;
+  const count = document.createElement("p");
+  count.className = "hint";
+  const capped = shown.slice(0, 200);
+  count.textContent = q
+    ? `${shown.length} match(es)${shown.length > 200 ? " — showing the first 200, refine the filter" : ""}`
+    : `${corpusItems.length} texts — showing the first 200, filter to narrow`;
+  desk.append(count);
+  const ul = document.createElement("ul");
+  for (const it of capped) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.textContent = `${it.displayName || it.filename}${it.textname ? ` (${it.textname})` : ""}`;
+    b.onclick = () => openCorpusText(it.filename, it.displayName || it.filename);
+    const meta = document.createElement("span");
+    meta.className = "hint";
+    meta.textContent = ` ${it.collection || ""}${it.collection && it.category ? " · " : ""}${it.category || ""}`;
+    li.append(b, meta);
+    ul.append(li);
+  }
+  desk.append(ul);
+}
+
+async function openCorpusText(file, fallbackTitle) {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = fallbackTitle;
+  desk.append(h);
+  const loading = document.createElement("p");
+  loading.className = "hint";
+  loading.textContent = "Loading text…";
+  desk.append(loading);
+  let t;
+  try {
+    t = await api(`/api/datasources/corpus/text?lang=${corpusLang}&file=${encodeURIComponent(file)}`);
+  } catch (e) {
+    showMsg(e.message, true);
+    return;
+  }
+  desk.replaceChildren();
+  const title = document.createElement("h2");
+  title.textContent = t.displayName || fallbackTitle;
+  desk.append(title);
+  const meta = document.createElement("p");
+  meta.className = "hint";
+  meta.textContent = `${t.textname ? t.textname + " · " : ""}${t.collection || ""}${t.category ? " · " + t.category : ""}${t.author ? " · " + t.author : ""} · ${t.segmentCount} segment(s)`;
+  desk.append(meta);
+  const nav = document.createElement("div");
+  nav.className = "nav";
+  const back = document.createElement("button");
+  back.textContent = "‹ Back to catalogue";
+  back.onclick = () => renderCorpusList("");
+  nav.append(back);
+  const reader = document.createElement("a");
+  reader.href = t.reader;
+  reader.target = "_blank";
+  reader.rel = "noreferrer";
+  reader.textContent = "Open on Dharmamitra";
+  nav.append(reader);
+  const imp = document.createElement("button");
+  imp.textContent = "Import into library";
+  imp.onclick = async () => {
+    imp.disabled = true;
+    imp.textContent = "Importing text…";
+    try {
+      const data = await api("/api/datasources/corpus/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lang: corpusLang, file, title: t.displayName || fallbackTitle }),
+      });
+      await loadDocs();
+      showMsg(data.already ? "Already in the library — opened the existing copy." : `Imported ${data.pages.length} text page(s).`);
+      await openDoc(data.doc.id);
+    } catch (e) {
+      showMsg(e.message, true);
+      imp.disabled = false;
+      imp.textContent = "Import into library";
+    }
+  };
+  nav.append(imp);
+  desk.append(nav);
+  const preview = document.createElement("div");
+  for (const s of t.preview) {
+    const p = document.createElement("p");
+    p.textContent = `${s.segmentnr} — ${s.original}`;
+    preview.append(p);
+  }
+  desk.append(preview);
+}
+
+$("ds-corpus").addEventListener("click", corpusView);
 
 // ---- Datasources: BDRC Library (live search -> instance -> volume) ----
 let bdrcReturn = null;

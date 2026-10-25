@@ -60,6 +60,18 @@ import {
   volumeInfoUrl,
   volumesForUrl,
 } from "./src/bdrc.ts";
+import {
+  CORPUS_LANGS,
+  type CorpusLang,
+  chunkSegments,
+  fetchCatalog,
+  fetchCorpusJson,
+  isCorpusFilename,
+  parseSegments,
+  passageUrl,
+  readerUrl,
+  segmentUrl,
+} from "./src/corpus.ts";
 
 const ROOT = import.meta.dir;
 const DATA = dataDirPath(ROOT);
@@ -463,6 +475,97 @@ Bun.serve({
           { doc: getDoc(db, docId), pages, failures, import_width: IMPORT_WIDTH },
           201,
         );
+      }
+
+      // ---- datasources: DharmaNexus corpora (GitHub, public domain / CC) ----
+      // NOTE: the desk never calls the Dharmamitra API — its terms forbid
+      // feeding third-party apps. It reads the project's own public
+      // GitHub corpora and links back to the Dharmamitra reader.
+      if (method === "GET" && path === "/api/datasources/corpus/catalog") {
+        const lang = url.searchParams.get("lang") || "";
+        if (!(lang in CORPUS_LANGS)) {
+          return json({ error: "Unknown corpus language (pa, sa, zh)." }, 400);
+        }
+        try {
+          const items = await fetchCatalog(lang as CorpusLang);
+          return json({ lang, label: CORPUS_LANGS[lang as CorpusLang].label, count: items.length, items });
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+      }
+      if (method === "GET" && path === "/api/datasources/corpus/text") {
+        const lang = url.searchParams.get("lang") || "";
+        const file = url.searchParams.get("file") || "";
+        if (!(lang in CORPUS_LANGS) || !isCorpusFilename(lang as CorpusLang, file)) {
+          return json({ error: "Unknown corpus language or file." }, 400);
+        }
+        try {
+          const [items, segments] = await Promise.all([
+            fetchCatalog(lang as CorpusLang),
+            fetchCorpusJson(segmentUrl(lang as CorpusLang, file)).then(parseSegments),
+          ]);
+          const entry = items.find((e) => e.filename === file);
+          return json({
+            lang,
+            filename: file,
+            displayName: entry?.displayName || file,
+            textname: entry?.textname || "",
+            collection: entry?.collection || "",
+            category: entry?.category || "",
+            author: entry?.author || "",
+            sourceLink: entry?.sourceLink || "",
+            segmentCount: segments.length,
+            preview: segments.slice(0, 5),
+            reader: readerUrl(lang as CorpusLang, file),
+          });
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+      }
+      if (method === "POST" && path === "/api/datasources/corpus/import") {
+        const body = await readJson(req);
+        const lang = typeof body.lang === "string" ? body.lang : "";
+        const file = typeof body.file === "string" ? body.file : "";
+        if (!(lang in CORPUS_LANGS) || !isCorpusFilename(lang as CorpusLang, file)) {
+          return json({ error: "Unknown corpus language or file." }, 400);
+        }
+        const info = CORPUS_LANGS[lang as CorpusLang];
+        const reader = readerUrl(lang as CorpusLang, file);
+        const existing = getDocBySourceUrl(db, reader);
+        if (existing) {
+          return json({ doc: existing, pages: getPages(db, existing.id), already: true });
+        }
+        let segments;
+        try {
+          segments = parseSegments(await fetchCorpusJson(segmentUrl(lang as CorpusLang, file)));
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+        if (segments.length === 0) {
+          return json({ error: "This text has no segments." }, 502);
+        }
+        const items = await fetchCatalog(lang as CorpusLang).catch(() => []);
+        const entry = items.find((e) => e.filename === file);
+        const title = typeof body.title === "string" && body.title.trim()
+          ? body.title.trim()
+          : entry?.displayName || file;
+        const pages = chunkSegments(segments);
+        const docId = createDoc(db, {
+          title,
+          source_type: "text",
+          filename: file,
+          file_path: "",
+          ocr_lang: info.ocrLang,
+          source_url: reader,
+          source_name: `DharmaNexus ${info.label} corpus (GitHub, public domain / CC)`,
+        });
+        for (let i = 0; i < pages.length; i++) {
+          addPage(
+            db, docId, i + 1, null, pages[i].text, "text",
+            passageUrl(lang as CorpusLang, file, pages[i].firstSegmentnr),
+          );
+        }
+        return json({ doc: getDoc(db, docId), pages: getPages(db, docId) }, 201);
       }
 
       // ---- documents ----

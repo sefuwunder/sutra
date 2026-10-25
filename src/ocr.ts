@@ -8,6 +8,11 @@ export const OCR_LANGS: Record<string, { label: string; tess: string }> = {
   bod: { label: "Tibetan", tess: "bod" },
   san: { label: "Sanskrit", tess: "san" },
   "bod+san": { label: "Tibetan or Sanskrit", tess: "bod+san" },
+  // Corpus-import languages: labels for the translation prompt and the
+  // doc meta line. They are NOT offered in the OCR select (tesseract
+  // has no Pāli data, and Chinese OCR is out of scope for the desk).
+  pli: { label: "Pāli", tess: "pli" },
+  zho: { label: "Chinese", tess: "chi_sim" },
 };
 
 export function langLabel(ocrLang: string): string {

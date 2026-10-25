@@ -28,6 +28,7 @@ export interface PageRow {
   source_kind: string;
   translation: string;
   notes: string;
+  source_ref: string | null;
 }
 
 export function initDb(path: string): Database {
@@ -71,6 +72,14 @@ export function initDb(path: string): Database {
   if (!names.has("source_name")) {
     db.exec(`ALTER TABLE documents ADD COLUMN source_name TEXT`);
   }
+  // Per-page deep link (added with the DharmaNexus corpora): a passage
+  // URL for text imports, null for uploads and image imports.
+  const pageCols = db
+    .query(`PRAGMA table_info(pages)`)
+    .all() as { name: string }[];
+  if (!pageCols.some((c) => c.name === "source_ref")) {
+    db.exec(`ALTER TABLE pages ADD COLUMN source_ref TEXT`);
+  }
   return db;
 }
 
@@ -111,13 +120,14 @@ export function addPage(
   imagePath: string | null,
   sourceText = "",
   sourceKind = "none",
+  sourceRef: string | null = null,
 ): number {
   const r = db
     .query(
-      `INSERT INTO pages (doc_id, page_no, image_path, source_text, source_kind)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO pages (doc_id, page_no, image_path, source_text, source_kind, source_ref)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run(docId, pageNo, imagePath, sourceText, sourceKind);
+    .run(docId, pageNo, imagePath, sourceText, sourceKind, sourceRef);
   db.query(`UPDATE documents SET page_count = page_count + 1 WHERE id = ?`).run(
     docId,
   );
