@@ -47,6 +47,15 @@ defaults. The desk binds 127.0.0.1 only.
   duplicate. The desk only ever fetches the database's own two hosts —
   its IIIF collection/manifests and its image server — so the import
   endpoint cannot be used as an open proxy.
+- **BDRC Library**: search the Buddhist Digital Resource Center by title
+  or author (Wylie or Tibetan script), or paste a BDRC id (MW… instance,
+  W… work, I… volume). Open an instance to see its volumes with their
+  access badges, preview a volume's pages, and import one volume at a
+  time at 2000px wide. Access is enforced per volume through BDRC's
+  volume info: only AccessOpen volumes download — restricted volumes
+  still serve a manifest (a 40-page extract), so they are shown but
+  never imported. OCR language is guessed from the volume's script
+  (Tibetan → bod, Devanagari → san).
 
 ## Tool setup (on the machine that runs the desk)
 
@@ -84,9 +93,14 @@ sudo apt-get install -y poppler-utils
 | `GET /api/datasources/utokyo` | UTokyo catalogue: all 525 manifests + titles |
 | `GET /api/datasources/utokyo/manifest?url=…` | One manuscript: metadata + page images |
 | `POST /api/datasources/utokyo/import` | Import a manuscript (`{manifest}`) as a doc |
+| `GET /api/datasources/bdrc/search?q=…` | BDRC literal-match search (or direct MW/W/I id) |
+| `GET /api/datasources/bdrc/instance?id=…` | BDRC instance: metadata + volumes + access |
+| `GET /api/datasources/bdrc/work?id=…` | BDRC work: volumes + access |
+| `GET /api/datasources/bdrc/volume?id=…` | BDRC volume: access + manifest + pages |
+| `POST /api/datasources/bdrc/import` | Import one open volume (`{volume, title, ocr_lang}`) |
 
 ## Tests
 
 ```sh
-bun test   # 17 tests: db, OCR args, Ollama client with stubbed fetch, IIIF parsing + URL allowlist
+bun test   # 24 tests: db, OCR args, Ollama client with stubbed fetch, IIIF parsing + URL allowlists, BDRC search/volumes/access
 ```

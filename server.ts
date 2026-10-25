@@ -42,6 +42,24 @@ import {
   parseCollection,
   parseManifest,
 } from "./src/iiif.ts";
+import {
+  ACCESS_OPEN,
+  blmpUrl,
+  fetchBdrcJson,
+  instanceGraphUrl,
+  isAllowedBdrcUrl,
+  isDirectId,
+  kindOf,
+  libraryUrl,
+  manifestUrl as bdrcManifestUrl,
+  parseBlmp,
+  parseInstanceGraph,
+  parseVolumeInfo,
+  parseVolumes,
+  scriptToOcrLang,
+  volumeInfoUrl,
+  volumesForUrl,
+} from "./src/bdrc.ts";
 
 const ROOT = import.meta.dir;
 const DATA = dataDirPath(ROOT);
@@ -236,6 +254,191 @@ Bun.serve({
           try {
             if (!isAllowedFetchUrl(canvas.sized)) {
               throw new Error("image URL outside the UTokyo hosts");
+            }
+            const res = await fetch(canvas.sized);
+            if (!res.ok) throw new Error(`image server returned ${res.status}`);
+            const rel = `docs/${docId}/page-${pageNo}.jpg`;
+            await Bun.write(join(dir, `page-${pageNo}.jpg`), await res.arrayBuffer());
+            addPage(db, docId, pageNo, rel);
+          } catch (e) {
+            failures.push(`page ${pageNo} (${canvas.label}): ${(e as Error).message}`);
+          }
+        }
+        const pages = getPages(db, docId);
+        if (pages.length === 0) {
+          deleteDoc(db, docId);
+          rmSync(dir, { recursive: true, force: true });
+          return json({ error: `Import failed: ${failures.join("; ")}` }, 502);
+        }
+        db.query(`UPDATE documents SET file_path = ? WHERE id = ?`).run(
+          pages[0].image_path,
+          docId,
+        );
+        return json(
+          { doc: getDoc(db, docId), pages, failures, import_width: IMPORT_WIDTH },
+          201,
+        );
+      }
+
+      // ---- datasources: BDRC Library (live catalogue + IIIF) ----
+      if (method === "GET" && path === "/api/datasources/bdrc/search") {
+        const q = (url.searchParams.get("q") || "").trim();
+        if (!q) return json({ error: "Empty search." }, 400);
+        if (isDirectId(q)) {
+          return json({ direct: kindOf(q), id: q });
+        }
+        try {
+          // Literal match in Tibetan (EWTS) and in English; merge, dedupe.
+          const [bo, en] = await Promise.allSettled([
+            fetchBdrcJson(blmpUrl(q, "bo-x-ewts", 50)),
+            fetchBdrcJson(blmpUrl(q, "en", 50)),
+          ]);
+          const hits = new Map<string, { id: string; kind: string; literal: string; lang: string }>();
+          for (const r of [bo, en]) {
+            if (r.status !== "fulfilled") continue;
+            for (const h of parseBlmp(r.value)) {
+              if (!hits.has(h.id)) hits.set(h.id, h);
+            }
+          }
+          return json({ hits: [...hits.values()].slice(0, 50) });
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+      }
+      if (method === "GET" && path === "/api/datasources/bdrc/instance") {
+        const id = url.searchParams.get("id") || "";
+        if (!/^MW[A-Za-z0-9]+$/.test(id)) {
+          return json({ error: "Not a BDRC instance id." }, 400);
+        }
+        try {
+          const [graph, vols] = await Promise.all([
+            fetchBdrcJson(instanceGraphUrl(id)),
+            fetchBdrcJson(volumesForUrl(id, "instance")),
+          ]);
+          const info = parseInstanceGraph(graph, id);
+          const volumes = parseVolumes(vols);
+          const withAccess = await Promise.all(
+            volumes.map(async (v) => {
+              try {
+                const vi = parseVolumeInfo(await fetchBdrcJson(volumeInfoUrl(v.id)));
+                return { ...v, access: vi?.access ?? "unknown", status: vi?.status ?? "", restrictedInChina: vi?.restrictedInChina ?? false, manifest: bdrcManifestUrl(v.id) };
+              } catch {
+                return { ...v, access: "unknown", status: "", restrictedInChina: false, manifest: bdrcManifestUrl(v.id) };
+              }
+            }),
+          );
+          const ocr = scriptToOcrLang(info.script);
+          return json({ info, volumes: withAccess, library: libraryUrl(id), ocr_lang: ocr.lang, script_label: ocr.script });
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+      }
+      if (method === "GET" && path === "/api/datasources/bdrc/work") {
+        const id = url.searchParams.get("id") || "";
+        if (!/^W[A-Za-z0-9]+$/.test(id)) {
+          return json({ error: "Not a BDRC work id." }, 400);
+        }
+        try {
+          const [graph, vols] = await Promise.allSettled([
+            fetchBdrcJson(`https://ldspdi.bdrc.io/query/graph/ResInfo?R_RES=bdr:${id}`),
+            fetchBdrcJson(volumesForUrl(id, "work")),
+          ]);
+          const title =
+            graph.status === "fulfilled" ? parseInstanceGraph(graph.value, id).title : "";
+          const volumes = vols.status === "fulfilled" ? parseVolumes(vols.value) : [];
+          const withAccess = await Promise.all(
+            volumes.map(async (v) => {
+              try {
+                const vi = parseVolumeInfo(await fetchBdrcJson(volumeInfoUrl(v.id)));
+                return { ...v, access: vi?.access ?? "unknown", status: vi?.status ?? "", restrictedInChina: vi?.restrictedInChina ?? false, manifest: bdrcManifestUrl(v.id) };
+              } catch {
+                return { ...v, access: "unknown", status: "", restrictedInChina: false, manifest: bdrcManifestUrl(v.id) };
+              }
+            }),
+          );
+          return json({ id, title, volumes: withAccess, library: libraryUrl(id) });
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+      }
+      if (method === "GET" && path === "/api/datasources/bdrc/volume") {
+        const id = url.searchParams.get("id") || "";
+        if (!/^I[A-Za-z0-9]+$/.test(id)) {
+          return json({ error: "Not a BDRC volume id." }, 400);
+        }
+        try {
+          const [viJson, manJson] = await Promise.all([
+            fetchBdrcJson(volumeInfoUrl(id)),
+            fetchBdrcJson(bdrcManifestUrl(id)),
+          ]);
+          const vi = parseVolumeInfo(viJson);
+          const m = parseManifest(manJson);
+          return json({
+            volume: id,
+            info: vi,
+            label: m.label,
+            canvases: m.canvases,
+            manifest: bdrcManifestUrl(id),
+            library: vi?.instanceId ? libraryUrl(vi.instanceId) : null,
+          });
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+      }
+      if (method === "POST" && path === "/api/datasources/bdrc/import") {
+        const body = await readJson(req);
+        const volume = typeof body.volume === "string" ? body.volume : "";
+        const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "";
+        const ocrLang = typeof body.ocr_lang === "string" && OCR_LANGS[body.ocr_lang] ? body.ocr_lang : "bod";
+        if (!/^I[A-Za-z0-9]+$/.test(volume)) {
+          return json({ error: "Not a BDRC volume id." }, 400);
+        }
+        const manifest = bdrcManifestUrl(volume);
+        // Access gate FIRST: restricted volumes serve an extract manifest,
+        // so the manifest alone must never authorize a download.
+        let vi;
+        try {
+          vi = parseVolumeInfo(await fetchBdrcJson(volumeInfoUrl(volume)));
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+        if (!vi || vi.access !== ACCESS_OPEN) {
+          return json(
+            { error: `This volume is not open access (access: ${vi?.access ?? "unknown"}) — BDRC does not offer it for download.` },
+            403,
+          );
+        }
+        const existing = getDocBySourceUrl(db, manifest);
+        if (existing) {
+          return json({ doc: existing, pages: getPages(db, existing.id), already: true });
+        }
+        let m;
+        try {
+          m = parseManifest(await fetchBdrcJson(manifest));
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+        if (m.canvases.length === 0) {
+          return json({ error: "This volume has no page images." }, 502);
+        }
+        const docId = createDoc(db, {
+          title: title || `${volume} (BDRC)`,
+          source_type: "image",
+          filename: manifest,
+          file_path: "",
+          ocr_lang: ocrLang,
+          source_url: manifest,
+          source_name: "Buddhist Digital Resource Center (BDRC) Library",
+        });
+        const dir = docDir(docId);
+        mkdirSync(dir, { recursive: true });
+        const failures: string[] = [];
+        for (let i = 0; i < m.canvases.length; i++) {
+          const canvas = m.canvases[i];
+          const pageNo = i + 1;
+          try {
+            if (!isAllowedBdrcUrl(canvas.sized)) {
+              throw new Error("image URL outside the BDRC hosts");
             }
             const res = await fetch(canvas.sized);
             if (!res.ok) throw new Error(`image server returned ${res.status}`);

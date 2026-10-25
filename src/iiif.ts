@@ -40,18 +40,31 @@ export function miradorUrl(manifestUrl: string): string {
   return `${MIRADOR_BASE}?sideBarPanel=info&manifest=${encodeURIComponent(manifestUrl)}`;
 }
 
-/// IIIF label: a plain string, or a language map like {en: ["..."]}.
+/// IIIF label: a plain string, a v3 language map like {en: ["..."]},
+/// or a v2 language object / array like {"@language": "en", "@value": "..."}.
 export function labelText(v: unknown): string {
   if (typeof v === "string") return v;
   if (Array.isArray(v)) {
+    // Prefer an English value, else the first value found.
+    let fallback = "";
     for (const item of v) {
-      const s = labelText(item);
-      if (s) return s;
+      if (item && typeof item === "object") {
+        const o = item as Record<string, unknown>;
+        const lang = o["@language"] ?? o.language;
+        const val = typeof o["@value"] === "string" ? (o["@value"] as string) : typeof o.value === "string" ? (o.value as string) : "";
+        if (val && !fallback) fallback = val;
+        if (val && lang === "en") return val;
+      } else {
+        const s = labelText(item);
+        if (s && !fallback) fallback = s;
+      }
     }
-    return "";
+    return fallback;
   }
   if (v && typeof v === "object") {
     const m = v as Record<string, unknown>;
+    if (typeof m["@value"] === "string") return m["@value"] as string;
+    if (typeof m.value === "string") return m.value as string;
     for (const key of ["en", "none", "ja"]) {
       const s = labelText(m[key]);
       if (s) return s;
@@ -155,7 +168,7 @@ export function parseManifest(json: unknown): ParsedManifest {
             ? `${serviceId}/full/256,/0/default.jpg`
             : "";
       canvases.push({
-        label: typeof c.label === "string" ? c.label : "",
+        label: labelText(c.label),
         canvas: typeof c["@id"] === "string" ? (c["@id"] as string) : "",
         thumb,
         service: serviceId,

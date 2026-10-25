@@ -447,6 +447,288 @@ async function openDsDetail(manifest, fallbackTitle) {
 
 $("ds-utokyo").addEventListener("click", openDatasource);
 
+// ---- Datasources: BDRC Library (live search -> instance -> volume) ----
+let bdrcReturn = null;
+
+function bdrcSearchView() {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = "BDRC Library";
+  desk.append(h);
+  const meta = document.createElement("p");
+  meta.className = "hint";
+  meta.textContent = "Search the Buddhist Digital Resource Center by title or author (Wylie or Tibetan script) — or paste a BDRC id (MW…, W…, I…). Only open-access volumes can be imported; restricted ones are shown but not downloaded.";
+  desk.append(meta);
+  const row = document.createElement("div");
+  row.className = "nav";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "e.g. lam rim chen mo, or MW3CN7814";
+  input.id = "bdrc-q";
+  const btn = document.createElement("button");
+  btn.textContent = "Search";
+  const go = async () => {
+    const q = input.value.trim();
+    if (!q) return;
+    btn.disabled = true;
+    btn.textContent = "Searching…";
+    try {
+      const data = await api(`/api/datasources/bdrc/search?q=${encodeURIComponent(q)}`);
+      if (data.direct) {
+        if (data.direct === "instance") await openBdrcInstance(data.id, bdrcSearchView);
+        else if (data.direct === "work") await openBdrcWork(data.id, bdrcSearchView);
+        else await openBdrcVolume(data.id, "", "bod", bdrcSearchView);
+        return;
+      }
+      renderBdrcHits(data.hits || [], q);
+    } catch (e) {
+      showMsg(e.message, true);
+    }
+    btn.disabled = false;
+    btn.textContent = "Search";
+  };
+  btn.onclick = go;
+  input.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); go(); } };
+  row.append(input, btn);
+  desk.append(row);
+}
+
+function renderBdrcHits(hits, q) {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = `BDRC results for “${q}”`;
+  desk.append(h);
+  const meta = document.createElement("p");
+  meta.className = "hint";
+  meta.textContent = hits.length ? `${hits.length} match(es) — instances and works with matching titles or names.` : "No matches. Try Wylie transliteration, or a BDRC id.";
+  desk.append(meta);
+  const back = document.createElement("button");
+  back.textContent = "‹ New search";
+  back.onclick = bdrcSearchView;
+  desk.append(back);
+  const ul = document.createElement("ul");
+  for (const hit of hits) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.textContent = `${hit.literal || hit.id} (${hit.id})`;
+    b.onclick = async () => {
+      if (hit.kind === "instance") await openBdrcInstance(hit.id, () => renderBdrcHits(hits, q));
+      else if (hit.kind === "work") await openBdrcWork(hit.id, () => renderBdrcHits(hits, q));
+      else await openBdrcVolume(hit.id, hit.literal, "bod", () => renderBdrcHits(hits, q));
+    };
+    li.append(b);
+    ul.append(li);
+  }
+  desk.append(ul);
+}
+
+async function openBdrcInstance(id, backFn) {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = id;
+  desk.append(h);
+  const loading = document.createElement("p");
+  loading.className = "hint";
+  loading.textContent = "Loading instance…";
+  desk.append(loading);
+  let data;
+  try {
+    data = await api(`/api/datasources/bdrc/instance?id=${encodeURIComponent(id)}`);
+  } catch (e) {
+    showMsg(e.message, true);
+    return;
+  }
+  desk.replaceChildren();
+  const title = document.createElement("h2");
+  title.textContent = data.info.title || id;
+  desk.append(title);
+  const meta = document.createElement("p");
+  meta.className = "hint";
+  meta.textContent = [data.info.publisher, data.info.location, data.info.extent, data.info.script, data.info.printMethod].filter(Boolean).join(" · ");
+  desk.append(meta);
+  const nav = document.createElement("div");
+  nav.className = "nav";
+  if (backFn) {
+    const back = document.createElement("button");
+    back.textContent = "‹ Back";
+    back.onclick = backFn;
+    nav.append(back);
+  }
+  const lib = document.createElement("a");
+  lib.href = data.library;
+  lib.target = "_blank";
+  lib.rel = "noreferrer";
+  lib.textContent = "Open in BDRC Library";
+  nav.append(lib);
+  desk.append(nav);
+  const vh = document.createElement("h3");
+  vh.textContent = `Volumes (${data.volumes.length})`;
+  desk.append(vh);
+  const ul = document.createElement("ul");
+  for (const v of data.volumes) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    const open = v.access === "AccessOpen";
+    b.textContent = `Volume ${v.num} (${v.id}) — ${open ? "open access" : v.access === "AccessFairUse" ? "restricted, not importable" : "access unknown"}`;
+    b.disabled = false;
+    b.onclick = () => openBdrcVolume(v.id, `${data.info.title || id} — volume ${v.num}`, data.ocr_lang || "bod", () => openBdrcInstance(id, backFn));
+    li.append(b);
+    ul.append(li);
+  }
+  desk.append(ul);
+}
+
+async function openBdrcWork(id, backFn) {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = id;
+  desk.append(h);
+  const loading = document.createElement("p");
+  loading.className = "hint";
+  loading.textContent = "Loading work…";
+  desk.append(loading);
+  let data;
+  try {
+    data = await api(`/api/datasources/bdrc/work?id=${encodeURIComponent(id)}`);
+  } catch (e) {
+    showMsg(e.message, true);
+    return;
+  }
+  desk.replaceChildren();
+  const title = document.createElement("h2");
+  title.textContent = data.title || id;
+  desk.append(title);
+  const nav = document.createElement("div");
+  nav.className = "nav";
+  if (backFn) {
+    const back = document.createElement("button");
+    back.textContent = "‹ Back";
+    back.onclick = backFn;
+    nav.append(back);
+  }
+  const lib = document.createElement("a");
+  lib.href = data.library;
+  lib.target = "_blank";
+  lib.rel = "noreferrer";
+  lib.textContent = "Open in BDRC Library";
+  nav.append(lib);
+  desk.append(nav);
+  const vh = document.createElement("h3");
+  vh.textContent = `Volumes (${data.volumes.length})`;
+  desk.append(vh);
+  const ul = document.createElement("ul");
+  for (const v of data.volumes) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    const open = v.access === "AccessOpen";
+    b.textContent = `Volume ${v.num} (${v.id}) — ${open ? "open access" : v.access === "AccessFairUse" ? "restricted, not importable" : "access unknown"}`;
+    b.onclick = () => openBdrcVolume(v.id, `${data.title || id} — volume ${v.num}`, "bod", () => openBdrcWork(id, backFn));
+    li.append(b);
+    ul.append(li);
+  }
+  desk.append(ul);
+}
+
+async function openBdrcVolume(id, titleHint, ocrLang, backFn) {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = titleHint || id;
+  desk.append(h);
+  const loading = document.createElement("p");
+  loading.className = "hint";
+  loading.textContent = "Loading volume…";
+  desk.append(loading);
+  let data;
+  try {
+    data = await api(`/api/datasources/bdrc/volume?id=${encodeURIComponent(id)}`);
+  } catch (e) {
+    showMsg(e.message, true);
+    return;
+  }
+  desk.replaceChildren();
+  const title = document.createElement("h2");
+  title.textContent = titleHint || `${data.label} (${id})`;
+  desk.append(title);
+  const open = data.info && data.info.access === "AccessOpen";
+  const meta = document.createElement("p");
+  meta.className = "hint";
+  meta.textContent = `${data.label} · ${data.canvases.length} page image(s) · access: ${data.info ? data.info.access : "unknown"}` +
+    (data.info && data.info.restrictedInChina ? " · note: BDRC marks this volume restricted in China" : "");
+  desk.append(meta);
+  const nav = document.createElement("div");
+  nav.className = "nav";
+  if (backFn) {
+    const back = document.createElement("button");
+    back.textContent = "‹ Back";
+    back.onclick = backFn;
+    nav.append(back);
+  }
+  if (data.library) {
+    const lib = document.createElement("a");
+    lib.href = data.library;
+    lib.target = "_blank";
+    lib.rel = "noreferrer";
+    lib.textContent = "Open in BDRC Library";
+    nav.append(lib);
+  }
+  const imp = document.createElement("button");
+  imp.textContent = open ? "Import volume into library" : "Import unavailable — volume is not open access";
+  imp.disabled = !open;
+  imp.onclick = async () => {
+    imp.disabled = true;
+    imp.textContent = "Importing pages… (long volumes take a while)";
+    try {
+      const res = await api("/api/datasources/bdrc/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ volume: id, title: titleHint || `${data.label} (${id})`, ocr_lang: ocrLang || "bod" }),
+      });
+      await loadDocs();
+      showMsg(
+        res.already
+          ? "Already in the library — opened the existing copy."
+          : `Imported ${res.pages.length} page(s) at 2000px wide.` +
+              (res.failures && res.failures.length ? ` ${res.failures.length} page(s) failed to download.` : ""),
+      );
+      await openDoc(res.doc.id);
+    } catch (e) {
+      showMsg(e.message, true);
+      imp.disabled = false;
+      imp.textContent = "Import volume into library";
+    }
+  };
+  nav.append(imp);
+  desk.append(nav);
+  const thumbs = document.createElement("div");
+  thumbs.className = "thumbs";
+  const shown = data.canvases.slice(0, 60);
+  for (const c of shown) {
+    const fig = document.createElement("figure");
+    const img = document.createElement("img");
+    img.src = c.thumb;
+    img.alt = c.label;
+    img.loading = "lazy";
+    const cap = document.createElement("figcaption");
+    cap.textContent = c.label;
+    fig.append(img, cap);
+    thumbs.append(fig);
+  }
+  desk.append(thumbs);
+  if (data.canvases.length > shown.length) {
+    const more = document.createElement("p");
+    more.className = "hint";
+    more.textContent = `Showing first ${shown.length} of ${data.canvases.length} pages — the import brings in all of them.`;
+    desk.append(more);
+  }
+}
+
+$("ds-bdrc").addEventListener("click", bdrcSearchView);
+
 $("upload").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const files = $("up-files").files;
