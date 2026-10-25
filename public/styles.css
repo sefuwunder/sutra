@@ -49,3 +49,10 @@ textarea.translation { min-height: 150px; }
 #msg { padding: 0 24px 20px; min-height: 20px; }
 #msg.err { color: #c22; }
 #msg.ok { color: #2a6e2a; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 14px; }
+dt { font-weight: 600; opacity: 0.8; }
+dd { margin: 0; overflow-wrap: anywhere; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.thumbs figure { margin: 0; width: 128px; }
+.thumbs img { width: 100%; border: 1px solid ButtonBorder; border-radius: 6px; }
+.thumbs figcaption { font-size: 12px; opacity: 0.7; text-align: center; }

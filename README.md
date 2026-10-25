@@ -38,6 +38,15 @@ defaults. The desk binds 127.0.0.1 only.
   its languages), pdftotext, pdftoppm, Ollama reachability. Missing tools
   degrade gracefully: the desk still opens, views, stores and edits
   everything.
+- **Datasources**: browse the UTokyo Database for Sanskrit Manuscripts
+  (525 manuscripts, CC BY 4.0) from the Library panel, filter by title,
+  read a manuscript's catalogue metadata and thumbnails, and import it:
+  every page downloads at 2000px wide (full resolution stays one
+  Mirador click away), lands as a Sanskrit document, and is ready to OCR
+  and translate. Re-importing returns the existing copy, never a
+  duplicate. The desk only ever fetches the database's own two hosts —
+  its IIIF collection/manifests and its image server — so the import
+  endpoint cannot be used as an open proxy.
 
 ## Tool setup (on the machine that runs the desk)
 
@@ -72,9 +81,12 @@ sudo apt-get install -y poppler-utils
 | `POST /api/docs/:id/pages/:n/ocr` | OCR one page (`{lang}`) |
 | `POST /api/docs/:id/pages/:n/translate` | Translate one page |
 | `POST /api/docs/:id/translate-all` | Translate every page with source text |
+| `GET /api/datasources/utokyo` | UTokyo catalogue: all 525 manifests + titles |
+| `GET /api/datasources/utokyo/manifest?url=…` | One manuscript: metadata + page images |
+| `POST /api/datasources/utokyo/import` | Import a manuscript (`{manifest}`) as a doc |
 
 ## Tests
 
 ```sh
-bun test   # 12 tests: db, OCR args, Ollama client with stubbed fetch
+bun test   # 17 tests: db, OCR args, Ollama client with stubbed fetch, IIIF parsing + URL allowlist
 ```

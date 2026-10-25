@@ -113,6 +113,18 @@ function renderDesk() {
   meta.className = "hint";
   meta.textContent = `${doc.source_type} · ${doc.filename} · ${doc.ocr_lang} · ${pages.length} page(s)`;
   desk.append(meta);
+  if (doc.source_url) {
+    const src = document.createElement("p");
+    src.className = "hint";
+    src.textContent = `Source: ${doc.source_name || "remote datasource"} — `;
+    const a = document.createElement("a");
+    a.href = doc.source_url;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    a.textContent = "manifest";
+    src.append(a);
+    desk.append(src);
+  }
 
   const nav = document.createElement("div");
   nav.className = "nav";
@@ -275,6 +287,165 @@ async function savePage(page, patch) {
     showMsg(e.message, true);
   }
 }
+
+// ---- Datasources: UTokyo Sanskrit Manuscripts (IIIF) ----
+let dsItems = [];
+let dsTitle = "";
+let dsAttribution = "";
+
+function openDatasource() {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = "UTokyo Sanskrit Manuscripts";
+  desk.append(h);
+  const loading = document.createElement("p");
+  loading.className = "hint";
+  loading.textContent = "Loading the catalogue…";
+  desk.append(loading);
+  api("/api/datasources/utokyo")
+    .then((data) => {
+      dsItems = data.items;
+      dsTitle = data.title;
+      dsAttribution = data.attribution;
+      renderDsList("");
+    })
+    .catch((e) => {
+      loading.textContent = "";
+      showMsg(e.message, true);
+    });
+}
+
+function renderDsList(filter) {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = dsTitle || "UTokyo Sanskrit Manuscripts";
+  desk.append(h);
+  const meta = document.createElement("p");
+  meta.className = "hint";
+  meta.textContent = `${dsItems.length} manuscripts · ${dsAttribution || "The University of Tokyo and The SAT Daizōkyō Database Committee"}`;
+  desk.append(meta);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "Filter by title or catalogue number…";
+  input.value = filter;
+  input.oninput = () => renderDsList(input.value);
+  desk.append(input);
+  const q = filter.trim().toLowerCase();
+  const shown = q
+    ? dsItems.filter((it) => it.title.toLowerCase().includes(q) || it.manifest.toLowerCase().includes(q))
+    : dsItems;
+  const count = document.createElement("p");
+  count.className = "hint";
+  count.textContent = q ? `${shown.length} of ${dsItems.length} shown` : `${shown.length} shown`;
+  desk.append(count);
+  const ul = document.createElement("ul");
+  for (const it of shown) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.textContent = it.title;
+    b.onclick = () => openDsDetail(it.manifest, it.title);
+    li.append(b);
+    ul.append(li);
+  }
+  desk.append(ul);
+}
+
+async function openDsDetail(manifest, fallbackTitle) {
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = fallbackTitle;
+  desk.append(h);
+  const loading = document.createElement("p");
+  loading.className = "hint";
+  loading.textContent = "Loading manuscript…";
+  desk.append(loading);
+  let m;
+  try {
+    m = await api(`/api/datasources/utokyo/manifest?url=${encodeURIComponent(manifest)}`);
+  } catch (e) {
+    showMsg(e.message, true);
+    return;
+  }
+  desk.replaceChildren();
+  const title = document.createElement("h2");
+  title.textContent = m.title || m.label || fallbackTitle;
+  desk.append(title);
+  const meta = document.createElement("p");
+  meta.className = "hint";
+  meta.textContent = `${m.label} · ${m.canvases.length} page image(s) · ${m.license ? "CC BY 4.0" : ""}`;
+  desk.append(meta);
+
+  const nav = document.createElement("div");
+  nav.className = "nav";
+  const back = document.createElement("button");
+  back.textContent = "‹ Back to catalogue";
+  back.onclick = () => renderDsList("");
+  nav.append(back);
+  const mirador = document.createElement("a");
+  mirador.href = m.mirador;
+  mirador.target = "_blank";
+  mirador.rel = "noreferrer";
+  mirador.textContent = "Open in Mirador (full resolution)";
+  nav.append(mirador);
+  const imp = document.createElement("button");
+  imp.textContent = "Import into library";
+  imp.onclick = async () => {
+    imp.disabled = true;
+    imp.textContent = "Importing pages… (long manuscripts take a while)";
+    try {
+      const data = await api("/api/datasources/utokyo/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ manifest }),
+      });
+      await loadDocs();
+      showMsg(
+        data.already
+          ? "Already in the library — opened the existing copy."
+          : `Imported ${data.pages.length} page(s) at 2000px wide.` +
+              (data.failures && data.failures.length ? ` ${data.failures.length} page(s) failed to download.` : ""),
+      );
+      await openDoc(data.doc.id);
+    } catch (e) {
+      showMsg(e.message, true);
+      imp.disabled = false;
+      imp.textContent = "Import into library";
+    }
+  };
+  nav.append(imp);
+  desk.append(nav);
+
+  if (m.metadata.length) {
+    const dl = document.createElement("dl");
+    for (const row of m.metadata) {
+      const dt = document.createElement("dt");
+      dt.textContent = row.label;
+      const dd = document.createElement("dd");
+      dd.textContent = row.value;
+      dl.append(dt, dd);
+    }
+    desk.append(dl);
+  }
+  const thumbs = document.createElement("div");
+  thumbs.className = "thumbs";
+  for (const c of m.canvases) {
+    const fig = document.createElement("figure");
+    const img = document.createElement("img");
+    img.src = c.thumb;
+    img.alt = c.label;
+    img.loading = "lazy";
+    const cap = document.createElement("figcaption");
+    cap.textContent = c.label;
+    fig.append(img, cap);
+    thumbs.append(fig);
+  }
+  desk.append(thumbs);
+}
+
+$("ds-utokyo").addEventListener("click", openDatasource);
 
 $("upload").addEventListener("submit", async (ev) => {
   ev.preventDefault();

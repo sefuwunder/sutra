@@ -12,6 +12,7 @@ import {
   addPage,
   listDocs,
   getDoc,
+  getDocBySourceUrl,
   getPages,
   getPage,
   updatePage,
@@ -32,6 +33,15 @@ import {
   renderPdfPages,
 } from "./src/ocr.ts";
 import { translateText, listModels } from "./src/translate.ts";
+import {
+  COLLECTION_URL,
+  IMPORT_WIDTH,
+  fetchJson,
+  isAllowedFetchUrl,
+  miradorUrl,
+  parseCollection,
+  parseManifest,
+} from "./src/iiif.ts";
 
 const ROOT = import.meta.dir;
 const DATA = dataDirPath(ROOT);
@@ -164,6 +174,92 @@ Bun.serve({
         } catch (e) {
           return json({ error: (e as Error).message }, 502);
         }
+      }
+
+      // ---- datasources: UTokyo Sanskrit Manuscripts (IIIF) ----
+      if (method === "GET" && path === "/api/datasources/utokyo") {
+        try {
+          const coll = parseCollection(await fetchJson(COLLECTION_URL));
+          return json(coll);
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+      }
+      if (method === "GET" && path === "/api/datasources/utokyo/manifest") {
+        const manifestUrl = url.searchParams.get("url") || "";
+        if (!isAllowedFetchUrl(manifestUrl)) {
+          return json({ error: "Only UTokyo Sanskrit Manuscripts manifests are allowed." }, 400);
+        }
+        try {
+          const m = parseManifest(await fetchJson(manifestUrl));
+          return json({ ...m, mirador: miradorUrl(manifestUrl) });
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+      }
+      if (method === "POST" && path === "/api/datasources/utokyo/import") {
+        const body = await readJson(req);
+        const manifestUrl = typeof body.manifest === "string" ? body.manifest : "";
+        if (!isAllowedFetchUrl(manifestUrl)) {
+          return json({ error: "Only UTokyo Sanskrit Manuscripts manifests are allowed." }, 400);
+        }
+        // Idempotent: re-importing a manuscript already in the library
+        // returns the existing document instead of duplicating it.
+        const existing = getDocBySourceUrl(db, manifestUrl);
+        if (existing) {
+          return json({ doc: existing, pages: getPages(db, existing.id), already: true });
+        }
+        let m;
+        try {
+          m = parseManifest(await fetchJson(manifestUrl));
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+        if (m.canvases.length === 0) {
+          return json({ error: "This manuscript has no page images." }, 502);
+        }
+        const docId = createDoc(db, {
+          title: m.title || m.label || "UTokyo manuscript",
+          source_type: "image",
+          filename: manifestUrl,
+          file_path: "",
+          ocr_lang: "san",
+          source_url: manifestUrl,
+          source_name: "UTokyo Sanskrit Manuscripts (CC BY 4.0)",
+        });
+        const dir = docDir(docId);
+        mkdirSync(dir, { recursive: true });
+        const failures: string[] = [];
+        for (let i = 0; i < m.canvases.length; i++) {
+          const canvas = m.canvases[i];
+          const pageNo = i + 1;
+          try {
+            if (!isAllowedFetchUrl(canvas.sized)) {
+              throw new Error("image URL outside the UTokyo hosts");
+            }
+            const res = await fetch(canvas.sized);
+            if (!res.ok) throw new Error(`image server returned ${res.status}`);
+            const rel = `docs/${docId}/page-${pageNo}.jpg`;
+            await Bun.write(join(dir, `page-${pageNo}.jpg`), await res.arrayBuffer());
+            addPage(db, docId, pageNo, rel);
+          } catch (e) {
+            failures.push(`page ${pageNo} (${canvas.label}): ${(e as Error).message}`);
+          }
+        }
+        const pages = getPages(db, docId);
+        if (pages.length === 0) {
+          deleteDoc(db, docId);
+          rmSync(dir, { recursive: true, force: true });
+          return json({ error: `Import failed: ${failures.join("; ")}` }, 502);
+        }
+        db.query(`UPDATE documents SET file_path = ? WHERE id = ?`).run(
+          pages[0].image_path,
+          docId,
+        );
+        return json(
+          { doc: getDoc(db, docId), pages, failures, import_width: IMPORT_WIDTH },
+          201,
+        );
       }
 
       // ---- documents ----

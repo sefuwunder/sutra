@@ -15,6 +15,8 @@ export interface DocRow {
   ocr_lang: string;
   page_count: number;
   created_at: number;
+  source_url: string | null;
+  source_name: string | null;
 }
 
 export interface PageRow {
@@ -58,6 +60,17 @@ export function initDb(path: string): Database {
       value TEXT NOT NULL
     );
   `);
+  // Datasource provenance (added after v1): never break old databases.
+  const cols = db
+    .query(`PRAGMA table_info(documents)`)
+    .all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has("source_url")) {
+    db.exec(`ALTER TABLE documents ADD COLUMN source_url TEXT`);
+  }
+  if (!names.has("source_name")) {
+    db.exec(`ALTER TABLE documents ADD COLUMN source_name TEXT`);
+  }
   return db;
 }
 
@@ -69,14 +82,25 @@ export function createDoc(
     filename: string;
     file_path: string;
     ocr_lang: string;
+    source_url?: string | null;
+    source_name?: string | null;
   },
 ): number {
   const r = db
     .query(
-      `INSERT INTO documents (title, source_type, filename, file_path, ocr_lang, page_count, created_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?)`,
+      `INSERT INTO documents (title, source_type, filename, file_path, ocr_lang, page_count, created_at, source_url, source_name)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
     )
-    .run(d.title, d.source_type, d.filename, d.file_path, d.ocr_lang, Date.now());
+    .run(
+      d.title,
+      d.source_type,
+      d.filename,
+      d.file_path,
+      d.ocr_lang,
+      Date.now(),
+      d.source_url ?? null,
+      d.source_name ?? null,
+    );
   return Number(r.lastInsertRowid);
 }
 
@@ -109,6 +133,13 @@ export function listDocs(db: Database): DocRow[] {
 export function getDoc(db: Database, id: number): DocRow | null {
   return (
     (db.query(`SELECT * FROM documents WHERE id = ?`).get(id) as DocRow) ?? null
+  );
+}
+
+export function getDocBySourceUrl(db: Database, url: string): DocRow | null {
+  return (
+    (db.query(`SELECT * FROM documents WHERE source_url = ?`).get(url) as DocRow) ??
+    null
   );
 }
 
