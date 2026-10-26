@@ -153,6 +153,13 @@ export function getDocBySourceUrl(db: Database, url: string): DocRow | null {
   );
 }
 
+/// Repair a document's source URL (used when an older import stored a
+/// reader id that later turned out to be wrong — the doc itself is
+/// kept, only its link is corrected).
+export function updateDocSourceUrl(db: Database, id: number, url: string): void {
+  db.query(`UPDATE documents SET source_url = ? WHERE id = ?`).run(url, id);
+}
+
 export function getPages(db: Database, docId: number): PageRow[] {
   return db
     .query(`SELECT * FROM pages WHERE doc_id = ? ORDER BY page_no ASC`)

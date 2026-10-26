@@ -190,6 +190,7 @@ export async function fetchCatalog(
 export interface Segment {
   segmentnr: string;
   original: string;
+  cbetaLink?: string;
 }
 
 export const MAX_SEGMENTS = 100_000;
@@ -202,7 +203,8 @@ export function parseSegments(json: unknown): Segment[] {
     const original = str(r.original);
     const segmentnr = str(r.segmentnr);
     if (!original.trim() || !segmentnr) continue;
-    out.push({ segmentnr, original });
+    const link = str(r.cbeta_link);
+    out.push(link ? { segmentnr, original, cbetaLink: link } : { segmentnr, original });
   }
   if (out.length > MAX_SEGMENTS) {
     throw new Error(
@@ -250,4 +252,98 @@ export function chunkSegments(segments: Segment[]): TextPage[] {
   }
   flush();
   return pages;
+}
+
+/// Replay chunkSegments' boundaries to find which 1-based desk page a
+/// segment lands on (0 when absent). Used so a CBETA resolve can open
+/// an imported text at the exact page of the passage.
+export function pageIndexForSegment(segments: Segment[], segmentnr: string): number {
+  let page = 1;
+  let count = 0;
+  let chars = 0;
+  for (const s of segments) {
+    if (count > 0 && (count >= PAGE_MAX_SEGMENTS || chars + s.original.length > PAGE_MAX_CHARS)) {
+      page++;
+      count = 0;
+      chars = 0;
+    }
+    if (s.segmentnr === segmentnr) return page;
+    count++;
+    chars += s.original.length;
+  }
+  return 0;
+}
+
+// ---- volume scan (CBETA resolve) ----
+
+export interface PageHit {
+  textname: string;
+  filename: string;
+  displayName: string;
+  ordinal: number;
+  segmentnr: string;
+  original: string;
+  prev: string[];
+  next: string[];
+  cbetaLink: string;
+}
+
+export const MAX_SCAN_FILES = 120;
+
+/// Find a page key inside one corpus volume (category like "X20").
+/// Pages run continuously through a volume, so scanning the volume's
+/// texts in catalogue order finds the passage even when the citation's
+/// text number is missing or wrong. Stops at the first hit; the cap
+/// bounds the worst case for the largest volumes.
+export async function findPageInVolume(
+  category: string,
+  pageKey: string,
+  preferTextname: string | null,
+  fetchFn: typeof fetch = fetch,
+): Promise<{ hit: PageHit | null; searchedFiles: number }> {
+  const items = await fetchCatalog("zh", fetchFn);
+  const vol = items.filter((e) => e.category === category);
+  const names: string[] = [];
+  for (const e of vol) {
+    if (!names.includes(e.textname)) names.push(e.textname);
+  }
+  if (preferTextname && names.includes(preferTextname)) {
+    names.splice(names.indexOf(preferTextname), 1);
+    names.unshift(preferTextname);
+  }
+  let searchedFiles = 0;
+  for (const textname of names) {
+    const files = vol
+      .filter((e) => e.textname === textname)
+      .map((e) => e.filename)
+      .sort();
+    const ordinal = names.indexOf(textname) + 1;
+    for (const file of files) {
+      if (searchedFiles >= MAX_SCAN_FILES) return { hit: null, searchedFiles };
+      const segments = parseSegments(await fetchCorpusJson(segmentUrl("zh", file), fetchFn));
+      searchedFiles++;
+      const idx = segments.findIndex((s) => {
+        const key = s.segmentnr.split(":").pop() || "";
+        return key === pageKey || key.startsWith(pageKey + "_");
+      });
+      if (idx >= 0) {
+        const displayName = vol.find((e) => e.textname === textname)?.displayName || textname;
+        return {
+          hit: {
+            textname,
+            filename: file,
+            displayName,
+            ordinal,
+            segmentnr: segments[idx].segmentnr,
+            original: segments[idx].original,
+            prev: segments.slice(Math.max(0, idx - 2), idx).map((s) => s.original),
+            next: segments.slice(idx + 1, idx + 3).map((s) => s.original),
+            cbetaLink: segments[idx].cbetaLink || "",
+          },
+          searchedFiles,
+        };
+      }
+    }
+  }
+  return { hit: null, searchedFiles };
 }

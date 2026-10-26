@@ -94,10 +94,10 @@ async function refreshModels(selected = "") {
   }
 }
 
-async function openDoc(id) {
+async function openDoc(id, startPage = 0) {
   const data = await api(`/api/docs/${id}`);
   cur = data;
-  pageIdx = 0;
+  pageIdx = startPage > 0 && startPage <= data.pages.length ? startPage - 1 : 0;
   renderDesk();
 }
 
@@ -623,6 +623,112 @@ async function openCorpusText(file, fallbackTitle) {
 }
 
 $("ds-corpus").addEventListener("click", corpusView);
+
+// ---- Datasources: CBETA reference resolve ----
+async function cbetaResolveView() {
+  const raw = $("cbeta-ref").value.trim();
+  if (!raw) { showMsg("Paste a CBETA reference first.", true); return; }
+  const desk = $("desk");
+  desk.replaceChildren();
+  const h = document.createElement("h2");
+  h.textContent = "CBETA passage";
+  desk.append(h);
+  const loading = document.createElement("p");
+  loading.className = "hint";
+  loading.textContent = "Resolving the reference… (scanning the volume's texts for the page)";
+  desk.append(loading);
+  let data;
+  try {
+    data = await api(`/api/datasources/cbeta/resolve?ref=${encodeURIComponent(raw)}`);
+  } catch (e) {
+    showMsg(e.message, true);
+    return;
+  }
+  desk.replaceChildren();
+  const title = document.createElement("h2");
+  title.textContent = "CBETA passage";
+  desk.append(title);
+  const r = data.ref;
+  const meta = document.createElement("p");
+  meta.className = "hint";
+  meta.textContent = `${r.canon} canon, volume ${r.volume}${r.edition ? ` · CBETA ${r.edition}` : ""} · page ${r.page}, column ${r.column}, line ${r.line} (page key ${r.pageKey})${r.textNo !== null ? ` · cited no. ${r.textNo}` : ""}`;
+  desk.append(meta);
+  for (const w of (data.warnings || [])) {
+    const warn = document.createElement("p");
+    warn.className = "hint";
+    warn.textContent = `Note: ${w}`;
+    desk.append(warn);
+  }
+  if (!data.found) {
+    const p = document.createElement("p");
+    p.textContent = data.note || "Passage not found in the corpus.";
+    desk.append(p);
+    if (data.cbeta) {
+      const a = document.createElement("a");
+      a.href = data.cbeta;
+      a.target = "_blank";
+      a.rel = "noreferrer";
+      a.textContent = "Open on CBETA Online";
+      desk.append(a);
+    }
+    return;
+  }
+  const hit = data.hit;
+  const head = document.createElement("p");
+  head.textContent = `${hit.displayName} (${hit.textname}, ${hit.ordinal}${hit.ordinal % 10 === 1 && hit.ordinal % 100 !== 11 ? "st" : hit.ordinal % 10 === 2 && hit.ordinal % 100 !== 12 ? "nd" : hit.ordinal % 10 === 3 && hit.ordinal % 100 !== 13 ? "rd" : "th"} text in volume ${r.volumeToken}) — juan file ${hit.filename}, segment ${hit.segmentnr}`;
+  desk.append(head);
+  const nav = document.createElement("div");
+  nav.className = "nav";
+  if (hit.cbeta) {
+    const a = document.createElement("a");
+    a.href = hit.cbeta;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    a.textContent = "Open on CBETA Online";
+    nav.append(a);
+  }
+  if (hit.reader) {
+    const a = document.createElement("a");
+    a.href = hit.reader;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    a.textContent = "Open this passage on Dharmamitra";
+    nav.append(a);
+  }
+  const imp = document.createElement("button");
+  imp.textContent = "Import this juan into library";
+  imp.onclick = async () => {
+    imp.disabled = true;
+    imp.textContent = "Importing…";
+    try {
+      const res = await api("/api/datasources/corpus/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lang: "zh", file: hit.filename, title: `${hit.displayName} — juan ${hit.filename.split("_").pop()}`, segment: hit.segmentnr }),
+      });
+      await loadDocs();
+      showMsg(res.already ? "Already in the library — opened at the passage." : "Imported — opened at the passage.");
+      await openDoc(res.doc.id, res.targetPage || 1);
+    } catch (e) {
+      showMsg(e.message, true);
+      imp.disabled = false;
+      imp.textContent = "Import this juan into library";
+    }
+  };
+  nav.append(imp);
+  desk.append(nav);
+  for (const line of [...hit.prev, hit.original, ...hit.next]) {
+    const p = document.createElement("p");
+    if (line === hit.original) p.style.fontWeight = "bold";
+    p.textContent = line;
+    desk.append(p);
+  }
+}
+
+$("cbeta-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  cbetaResolveView();
+});
 
 // ---- Datasources: BDRC Library (live search -> instance -> volume) ----
 let bdrcReturn = null;

@@ -133,3 +133,19 @@ describe("fetchCatalog cache", () => {
     expect(second).toEqual(first);
   });
 });
+
+describe("Dharmamitra reader ids", () => {
+  test("the reader id is the corpus text name, not the juan file", async () => {
+    const mod = await import("../src/corpus.ts");
+    // /db/zh/ZH_X20_0358/text shows the text; the juan-file id
+    // /db/zh/ZH_X20_0358_001/text shows "No results found"
+    // (verified live 2026-10-26). Pāli/Sanskrit file names already
+    // are their text names, so the same call covers them.
+    expect(mod.readerUrl("zh", "ZH_X20_0358")).toBe(
+      "https://dharmamitra.org/db/zh/ZH_X20_0358/text",
+    );
+    expect(mod.passageUrl("zh", "ZH_X20_0358", "ZH_X20_0358_001:0137a09")).toBe(
+      "https://dharmamitra.org/db/zh/ZH_X20_0358/text?active_segment=ZH_X20_0358_001%3A0137a09",
+    );
+  });
+});

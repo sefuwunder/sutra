@@ -59,13 +59,26 @@ defaults. The desk binds 127.0.0.1 only.
 - **DharmaNexus corpora**: browse the Pāli (4,258 texts), Sanskrit and
   Chinese (49,211 juan entries) corpora the Dharmamitra project publishes
   on GitHub under public-domain / Creative Commons licensing, and import
-  a text as text pages — no OCR needed, ready to translate. The corpus
-  filename IS the Dharmamitra reader id, so every imported page links to
-  its exact passage on Dharmamitra (`/db/{pa,sa,zh}/{filename}/text`).
+  a text as text pages — no OCR needed, ready to translate. The
+  Dharmamitra reader id is the corpus text name: for Pāli and Sanskrit
+  that is the file name, but for Chinese it is the file name minus the
+  juan suffix (`ZH_X20_0358`, not `ZH_X20_0358_001` — the juan id loads
+  the title but shows "No results found", verified live 2026-10-26).
+  Every imported page links to its exact passage on Dharmamitra
+  (`/db/{pa,sa,zh}/{textname}/text?active_segment=…`).
   The desk deliberately does NOT call the Dharmamitra API: its Terms of
   Service forbid using it to populate third-party applications. Tibetan
   has no public corpus repo under this scheme, so it is not listed here
   (BDRC covers Tibetan scans).
+- **CBETA references**: paste a citation like `CBETA 2026.R2, TX20,
+  no. 12, p. b137a9`, a compact id like `X20n0358_p0137a09`, or an
+  academic form like `T 1883.45.672a15`, and the desk resolves it to
+  the passage in the Chinese corpus (volume + page is the key — pages
+  run continuously through a volume, so the text number is a cross-check,
+  not the key), with a CBETA Online link, a Dharmamitra passage link,
+  and one-click import of the
+  juan, opened at the passage's page. Parse assumptions (a stray leading
+  letter, a page letter) are reported, never silently swallowed.
 
 ## Tool setup (on the machine that runs the desk)
 
@@ -110,10 +123,11 @@ sudo apt-get install -y poppler-utils
 | `POST /api/datasources/bdrc/import` | Import one open volume (`{volume, title, ocr_lang}`) |
 | `GET /api/datasources/corpus/catalog?lang=pa\|sa\|zh` | DharmaNexus corpus catalogue (cached 1h) |
 | `GET /api/datasources/corpus/text?lang=…&file=…` | One corpus text: metadata + segment count + preview |
-| `POST /api/datasources/corpus/import` | Import a corpus text (`{lang, file, title}`) as text pages |
+| `POST /api/datasources/corpus/import` | Import a corpus text (`{lang, file, title, segment?}`) as text pages; `segment` opens the import at that segment's page |
+| `GET /api/datasources/cbeta/resolve?ref=…` | Resolve a CBETA citation to the Chinese-corpus passage (CBETA link + import target) |
 
 ## Tests
 
 ```sh
-bun test   # 32 tests: db, OCR args, Ollama client with stubbed fetch, IIIF parsing + URL allowlists, BDRC search/volumes/access, corpus catalog/segments/chunking/allowlist/cache
+bun test   # 41 tests: db, OCR args, Ollama client with stubbed fetch, IIIF parsing + URL allowlists, BDRC search/volumes/access, corpus catalog/segments/chunking/allowlist/cache, CBETA reference parsing + volume scan
 ```

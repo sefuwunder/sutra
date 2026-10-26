@@ -13,6 +13,7 @@ import {
   listDocs,
   getDoc,
   getDocBySourceUrl,
+  updateDocSourceUrl,
   getPages,
   getPage,
   updatePage,
@@ -66,12 +67,19 @@ import {
   chunkSegments,
   fetchCatalog,
   fetchCorpusJson,
+  findPageInVolume,
   isCorpusFilename,
+  pageIndexForSegment,
   parseSegments,
   passageUrl,
   readerUrl,
   segmentUrl,
 } from "./src/corpus.ts";
+import {
+  cbetaPassageUrl,
+  cbetaTextUrl,
+  parseCbetaRef,
+} from "./src/cbeta.ts";
 
 const ROOT = import.meta.dir;
 const DATA = dataDirPath(ROOT);
@@ -516,7 +524,7 @@ Bun.serve({
             sourceLink: entry?.sourceLink || "",
             segmentCount: segments.length,
             preview: segments.slice(0, 5),
-            reader: readerUrl(lang as CorpusLang, file),
+            reader: readerUrl(lang as CorpusLang, entry?.textname || file),
           });
         } catch (e) {
           return json({ error: (e as Error).message }, 502);
@@ -530,10 +538,38 @@ Bun.serve({
           return json({ error: "Unknown corpus language or file." }, 400);
         }
         const info = CORPUS_LANGS[lang as CorpusLang];
-        const reader = readerUrl(lang as CorpusLang, file);
-        const existing = getDocBySourceUrl(db, reader);
+        const segment = typeof body.segment === "string" ? body.segment : "";
+        // The Dharmamitra reader id is the corpus TEXT name, not the
+        // juan file: /db/zh/ZH_X20_0358_001/text loads the title but
+        // shows "No results found", while /db/zh/ZH_X20_0358/text shows
+        // the text (verified live 2026-10-26). For Pāli/Sanskrit the
+        // file name already is the text name, so this changes nothing
+        // there. Docs imported before this fix carry the juan-file
+        // reader URL; they are matched by that legacy URL and repaired
+        // to the text-name URL instead of duplicating.
+        const items = await fetchCatalog(lang as CorpusLang).catch(() => []);
+        const entry = items.find((e) => e.filename === file);
+        const textname = entry?.textname || file;
+        const reader = readerUrl(lang as CorpusLang, textname);
+        let existing = getDocBySourceUrl(db, reader);
+        if (!existing && textname !== file) {
+          existing = getDocBySourceUrl(db, readerUrl(lang as CorpusLang, file));
+          if (existing) {
+            updateDocSourceUrl(db, existing.id, reader);
+            existing = getDoc(db, existing.id) ?? existing;
+          }
+        }
         if (existing) {
-          return json({ doc: existing, pages: getPages(db, existing.id), already: true });
+          let targetPage = 0;
+          if (segment) {
+            try {
+              const segs = parseSegments(await fetchCorpusJson(segmentUrl(lang as CorpusLang, file)));
+              targetPage = pageIndexForSegment(segs, segment);
+            } catch {
+              // leave 0: the doc still opens at page 1
+            }
+          }
+          return json({ doc: existing, pages: getPages(db, existing.id), already: true, targetPage });
         }
         let segments;
         try {
@@ -544,8 +580,6 @@ Bun.serve({
         if (segments.length === 0) {
           return json({ error: "This text has no segments." }, 502);
         }
-        const items = await fetchCatalog(lang as CorpusLang).catch(() => []);
-        const entry = items.find((e) => e.filename === file);
         const title = typeof body.title === "string" && body.title.trim()
           ? body.title.trim()
           : entry?.displayName || file;
@@ -562,10 +596,67 @@ Bun.serve({
         for (let i = 0; i < pages.length; i++) {
           addPage(
             db, docId, i + 1, null, pages[i].text, "text",
-            passageUrl(lang as CorpusLang, file, pages[i].firstSegmentnr),
+            passageUrl(lang as CorpusLang, textname, pages[i].firstSegmentnr),
           );
         }
-        return json({ doc: getDoc(db, docId), pages: getPages(db, docId) }, 201);
+        const targetPage = segment ? pageIndexForSegment(segments, segment) : 0;
+        return json({ doc: getDoc(db, docId), pages: getPages(db, docId), targetPage }, 201);
+      }
+
+      // ---- datasources: CBETA reference resolve ----
+      // Pasted citations ("CBETA 2026.R2, TX20, no. 12, p. b137a9",
+      // "X20n0358_p0137a09", "T 1883.45.672a15") resolve to the passage
+      // in the desk's Chinese corpus. Volume + page is the key: pages
+      // run continuously through a volume, so the scan finds the text
+      // even when the citation's text number is missing or wrong.
+      if (method === "GET" && path === "/api/datasources/cbeta/resolve") {
+        const raw = url.searchParams.get("ref") || "";
+        const parsed = parseCbetaRef(raw);
+        if (!parsed) {
+          return json({ error: "Could not parse that as a CBETA reference. Try e.g. CBETA 2026.R2, TX20, no. 12, p. b137a9, or a CBETA id like X20n0358_p0137a09." }, 400);
+        }
+        const warnings: string[] = [];
+        if (parsed.droppedPrefix) {
+          warnings.push(`Read "${parsed.raw}" as ${parsed.canon} canon, volume ${parsed.volume} — the leading "${parsed.droppedPrefix}" is not a CBETA canon code and was ignored.`);
+        }
+        if (parsed.leadingPageLetter) {
+          warnings.push(`Page "${parsed.leadingPageLetter}${parsed.page}${parsed.column}${parsed.line}" read as page ${parsed.page}, column ${parsed.column}, line ${parsed.line}.`);
+        }
+        if (parsed.canon !== "T" && parsed.canon !== "X") {
+          return json({
+            ref: parsed, warnings: [...warnings, `Corpus lookup covers the Taishō (T) and Zokuzōkyō (X) canons; ${parsed.canon} is not in the desk's Chinese corpus.`],
+            found: false,
+            cbeta: parsed.textNo !== null ? cbetaTextUrl(parsed.canon, parsed.textNo) : null,
+          });
+        }
+        let prefer: string | null = null;
+        if ((parsed.textNoForm === "n" || parsed.textNoForm === "academic") && parsed.textNo !== null) {
+          prefer = `ZH_${parsed.volumeToken}_${String(parsed.textNo).padStart(4, "0")}`;
+        }
+        let scan;
+        try {
+          scan = await findPageInVolume(parsed.volumeToken, parsed.pageKey, prefer);
+        } catch (e) {
+          return json({ error: (e as Error).message }, 502);
+        }
+        if (!scan.hit) {
+          return json({ ref: parsed, warnings, found: false, searchedFiles: scan.searchedFiles, note: `No segment with page key ${parsed.pageKey} in the first ${scan.searchedFiles} juan file(s) of volume ${parsed.volumeToken}.` });
+        }
+        const hit = scan.hit;
+        const suffix = hit.textname.slice(`ZH_${parsed.volumeToken}_`.length);
+        const globalNo = parseInt(suffix, 10);
+        const ord = hit.ordinal;
+        const ordSuffix = ord % 10 === 1 && ord % 100 !== 11 ? "st" : ord % 10 === 2 && ord % 100 !== 12 ? "nd" : ord % 10 === 3 && ord % 100 !== 13 ? "rd" : "th";
+        if (parsed.textNoForm === "no" && parsed.textNo !== null && parsed.textNo !== globalNo) {
+          warnings.push(`The citation's "no. ${parsed.textNo}" does not match the text this page lands in (${hit.textname}, the ${ord}${ordSuffix} text in volume ${parsed.volumeToken}) — the page match is trusted over the number.`);
+        }
+        if (prefer && hit.textname !== prefer) {
+          warnings.push(`The citation's text number points at ${prefer}, but page ${parsed.pageKey} was found in ${hit.textname} instead.`);
+        }
+        const cbeta = hit.cbetaLink || (!Number.isNaN(globalNo)
+          ? cbetaPassageUrl(parsed.canon, parsed.volume, globalNo, parsed.pageKey)
+          : null);
+        return json({ ref: parsed, warnings, found: true, searchedFiles: scan.searchedFiles, hit: { ...hit, cbeta, reader: passageUrl("zh", hit.textname, hit.segmentnr) } });
       }
 
       // ---- documents ----
