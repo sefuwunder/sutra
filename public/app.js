@@ -6,6 +6,38 @@ let docs = [];
 let cur = null; // { doc, pages }
 let pageIdx = 0;
 let tools = null;
+let settings = { translate_provider: "ollama", gemini_key_set: false, gemini_model: "gemini-2.5-flash" };
+
+function viewerEl() { return $("viewer"); }
+function studyEl() { return $("study"); }
+
+function emptyStudy() {
+  const s = studyEl();
+  s.replaceChildren();
+  const p = document.createElement("p");
+  p.className = "empty";
+  p.textContent = "Open a page to study it here — source, translation, and notes.";
+  s.append(p);
+}
+
+// Datasource views render into the viewer pane; the study pane resets
+// to its empty hint until a page is opened.
+function showInViewer() {
+  const v = viewerEl();
+  v.replaceChildren();
+  emptyStudy();
+  return v;
+}
+
+function clearDesk() {
+  const v = viewerEl();
+  v.replaceChildren();
+  const p = document.createElement("p");
+  p.className = "empty";
+  p.textContent = "Pick a sutra from the library, or add one.";
+  v.append(p);
+  emptyStudy();
+}
 
 function showMsg(text, isErr = false) {
   msgEl.textContent = text;
@@ -38,6 +70,9 @@ async function loadTools() {
     chip("pdftoppm", tools.pdftoppm),
     chip("ollama", tools.ollama_ok),
   );
+  if (tools.translate_provider === "gemini") {
+    el.append(chip("gemini key", tools.gemini_key_set));
+  }
   if (tools.tesseract) {
     const langs = document.createElement("span");
     langs.className = "chip";
@@ -67,9 +102,29 @@ async function loadDocs() {
   }
 }
 
+function setProvider(p) {
+  settings.translate_provider = p;
+  for (const b of document.querySelectorAll("#provider-seg button")) {
+    b.setAttribute("aria-pressed", b.dataset.provider === p ? "true" : "false");
+  }
+  $("set-ollama").hidden = p !== "ollama";
+  $("set-gemini").hidden = p !== "gemini";
+}
+
+function updateGeminiKeyStatus(isSet) {
+  $("gemini-key-status").textContent = isSet
+    ? "Gemini key saved. It is never shown again — paste a new key to replace it, or clear it below."
+    : "No Gemini key saved.";
+}
+
 async function loadSettings() {
   const s = await api("/api/settings");
+  settings = s;
   $("set-url").value = s.ollama_url;
+  setProvider(s.translate_provider || "ollama");
+  $("set-gemini-model").value = s.gemini_model || "gemini-2.5-flash";
+  $("set-gemini-key").value = "";
+  updateGeminiKeyStatus(s.gemini_key_set);
   await refreshModels(s.ollama_model);
 }
 
@@ -102,8 +157,12 @@ async function openDoc(id, startPage = 0) {
 }
 
 function renderDesk() {
-  const desk = $("desk");
+  // Viewer pane: title, page image, navigation. Study pane: source,
+  // translation, notes. Datasource views use showInViewer() instead.
+  const desk = viewerEl();
+  const study = studyEl();
   desk.replaceChildren();
+  study.replaceChildren();
   if (!cur) return;
   const { doc, pages } = cur;
   const h = document.createElement("h2");
@@ -137,7 +196,7 @@ function renderDesk() {
   next.disabled = pageIdx >= pages.length - 1;
   next.onclick = () => { pageIdx++; renderDesk(); };
   const pg = document.createElement("span");
-  pg.textContent = `Page ${pages.length ? pages[pageIdx].page_no + 1 : 0} of ${pages.length}`;
+  pg.textContent = `Page ${pages.length ? pageIdx + 1 : 0} of ${pages.length}`;
   nav.append(prev, pg, next);
   if (doc.source_type === "pdf" && !pages.some((p) => p.image_path)) {
     const render = document.createElement("button");
@@ -172,11 +231,7 @@ function renderDesk() {
     if (!confirm(`Delete "${doc.title}" and its files?`)) return;
     await api(`/api/docs/${doc.id}`, { method: "DELETE" });
     cur = null;
-    desk.replaceChildren();
-    const p = document.createElement("p");
-    p.className = "empty";
-    p.textContent = "Pick a sutra from the library, or add one.";
-    desk.append(p);
+    clearDesk();
     loadDocs();
   };
   nav.append(del);
@@ -207,17 +262,17 @@ function renderDesk() {
     a.rel = "noreferrer";
     a.textContent = "Open this passage on Dharmamitra";
     ref.append(a);
-    desk.append(ref);
+    study.append(ref);
   }
 
   const srcLabel = document.createElement("h3");
   srcLabel.textContent = `Source text (${page.source_kind === "none" ? "empty" : page.source_kind})`;
-  desk.append(srcLabel);
+  study.append(srcLabel);
   const src = document.createElement("textarea");
   src.className = "source";
   src.value = page.source_text;
   src.onblur = () => savePage(page, { source_text: src.value });
-  desk.append(src);
+  study.append(src);
 
   const row = document.createElement("div");
   row.className = "nav";
@@ -253,18 +308,19 @@ function renderDesk() {
     note.textContent = "No image on this page — render the PDF into pages to OCR per page.";
     row.append(note);
   }
-  desk.append(row);
+  study.append(row);
 
   const trLabel = document.createElement("h3");
   trLabel.textContent = "Translation (English — editable)";
-  desk.append(trLabel);
+  study.append(trLabel);
   const tr = document.createElement("textarea");
   tr.className = "translation";
   tr.value = page.translation;
   tr.onblur = () => savePage(page, { translation: tr.value });
-  desk.append(tr);
+  study.append(tr);
   const trBtn = document.createElement("button");
-  trBtn.textContent = "Translate this page (Ollama)";
+  trBtn.textContent = `Translate this page (${settings.translate_provider === "gemini" ? "Gemini" : "Ollama"})`;
+  trBtn.className = "primary";
   trBtn.onclick = async () => {
     trBtn.disabled = true;
     try {
@@ -275,16 +331,16 @@ function renderDesk() {
     } catch (e) { showMsg(e.message, true); }
     trBtn.disabled = false;
   };
-  desk.append(trBtn);
+  study.append(trBtn);
 
   const nLabel = document.createElement("h3");
   nLabel.textContent = "Notes";
-  desk.append(nLabel);
+  study.append(nLabel);
   const notes = document.createElement("textarea");
   notes.className = "notes";
   notes.value = page.notes;
   notes.onblur = () => savePage(page, { notes: notes.value });
-  desk.append(notes);
+  study.append(notes);
 }
 
 async function savePage(page, patch) {
@@ -306,7 +362,7 @@ let dsTitle = "";
 let dsAttribution = "";
 
 function openDatasource() {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = "UTokyo Sanskrit Manuscripts";
@@ -329,7 +385,7 @@ function openDatasource() {
 }
 
 function renderDsList(filter) {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = dsTitle || "UTokyo Sanskrit Manuscripts";
@@ -365,7 +421,7 @@ function renderDsList(filter) {
 }
 
 async function openDsDetail(manifest, fallbackTitle) {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = fallbackTitle;
@@ -468,7 +524,7 @@ let corpusLang = "pa";
 const CORPUS_LABELS = { pa: "Pāli", sa: "Sanskrit", zh: "Chinese" };
 
 function corpusView() {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = "DharmaNexus corpora";
@@ -503,7 +559,7 @@ function corpusView() {
 }
 
 function renderCorpusList(filter) {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = `DharmaNexus corpora — ${CORPUS_LABELS[corpusLang]}`;
@@ -555,7 +611,7 @@ function renderCorpusList(filter) {
 }
 
 async function openCorpusText(file, fallbackTitle) {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = fallbackTitle;
@@ -628,7 +684,7 @@ $("ds-corpus").addEventListener("click", corpusView);
 async function cbetaResolveView() {
   const raw = $("cbeta-ref").value.trim();
   if (!raw) { showMsg("Paste a CBETA reference first.", true); return; }
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = "CBETA passage";
@@ -734,7 +790,7 @@ $("cbeta-form").addEventListener("submit", (ev) => {
 let bdrcReturn = null;
 
 function bdrcSearchView() {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = "BDRC Library";
@@ -778,7 +834,7 @@ function bdrcSearchView() {
 }
 
 function renderBdrcHits(hits, q) {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = `BDRC results for “${q}”`;
@@ -808,7 +864,7 @@ function renderBdrcHits(hits, q) {
 }
 
 async function openBdrcInstance(id, backFn) {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = id;
@@ -865,7 +921,7 @@ async function openBdrcInstance(id, backFn) {
 }
 
 async function openBdrcWork(id, backFn) {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = id;
@@ -917,7 +973,7 @@ async function openBdrcWork(id, backFn) {
 }
 
 async function openBdrcVolume(id, titleHint, ocrLang, backFn) {
-  const desk = $("desk");
+  const desk = showInViewer();
   desk.replaceChildren();
   const h = document.createElement("h2");
   h.textContent = titleHint || id;
@@ -1032,21 +1088,80 @@ $("upload").addEventListener("submit", async (ev) => {
 
 $("settings").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  // The Gemini key input is empty on load (the server never sends the
+  // key back), so only include it when the user typed a new one —
+  // otherwise an ordinary save would wipe the saved key.
+  const patch = {
+    ollama_url: $("set-url").value,
+    ollama_model: $("set-model").value,
+    translate_provider: settings.translate_provider,
+    gemini_model: $("set-gemini-model").value,
+  };
+  const key = $("set-gemini-key").value.trim();
+  if (key) patch.gemini_api_key = key;
   try {
-    await api("/api/settings", {
+    const s = await api("/api/settings", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ollama_url: $("set-url").value,
-        ollama_model: $("set-model").value,
-      }),
+      body: JSON.stringify(patch),
     });
+    settings = s;
+    $("set-gemini-key").value = "";
+    updateGeminiKeyStatus(s.gemini_key_set);
     showMsg("Settings saved.");
     loadTools();
   } catch (e) { showMsg(e.message, true); }
 });
 
+$("clear-gemini-key").addEventListener("click", async () => {
+  try {
+    const s = await api("/api/settings", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ gemini_api_key: "" }),
+    });
+    settings = s;
+    updateGeminiKeyStatus(false);
+    showMsg("Gemini key cleared.");
+    loadTools();
+  } catch (e) { showMsg(e.message, true); }
+});
+
+for (const b of document.querySelectorAll("#provider-seg button")) {
+  b.addEventListener("click", () => setProvider(b.dataset.provider));
+}
+
 $("refresh-models").addEventListener("click", () => refreshModels($("set-model").value));
+
+// ---- collapsible panes (state persists locally) ----
+function applyPaneState(name, collapsed) {
+  const pane = $(`pane-${name}`);
+  const main = $("panes");
+  pane.classList.toggle("collapsed", collapsed);
+  main.classList.toggle(`hide-${name}`, collapsed);
+  try {
+    localStorage.setItem(`sutra-pane-${name}`, collapsed ? "1" : "0");
+  } catch { /* private mode / non-http contexts: collapse just doesn't persist */ }
+}
+
+function restorePaneState() {
+  for (const name of ["library", "viewer", "study"]) {
+    let collapsed = false;
+    try {
+      collapsed = localStorage.getItem(`sutra-pane-${name}`) === "1";
+    } catch { /* ignore */ }
+    if (collapsed) applyPaneState(name, true);
+  }
+}
+
+for (const btn of document.querySelectorAll(".collapse")) {
+  btn.addEventListener("click", () => {
+    const name = btn.dataset.pane;
+    const collapsed = !$(`pane-${name}`).classList.contains("collapsed");
+    applyPaneState(name, collapsed);
+  });
+}
+restorePaneState();
 
 loadTools().catch((e) => showMsg(e.message, true));
 loadDocs().catch((e) => showMsg(e.message, true));

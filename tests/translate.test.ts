@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { buildPrompt, translateText, listModels } from "../src/translate.ts";
+import { buildPrompt, translateText, listModels, translateWithProvider } from "../src/translate.ts";
 
 describe("buildPrompt", () => {
   test("asks for English only, no commentary", () => {
@@ -67,5 +67,55 @@ describe("listModels", () => {
       stubFetch({ models: [{ name: "a:1" }, { name: "b" }] }),
     );
     expect(names).toEqual(["a:1", "b"]);
+  });
+});
+
+describe("translateWithProvider", () => {
+  function capturingFetch(body: unknown) {
+    const seen: { url: string; init: Record<string, unknown> } = { url: "", init: {} };
+    const fn = (async (url: string, init: Record<string, unknown>) => {
+      seen.url = url;
+      seen.init = init;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => body,
+        text: async () => JSON.stringify(body),
+      };
+    }) as unknown as typeof fetch;
+    return { fn, seen };
+  }
+
+  const base = {
+    ollama: { url: "http://localhost:11434", model: "m" },
+    gemini: { apiKey: "test-key-123", model: "gemini-2.5-flash" },
+  };
+
+  test("ollama routes to /api/generate", async () => {
+    const { fn, seen } = capturingFetch({ response: "hi" });
+    const out = await translateWithProvider("src", "Tibetan", {
+      provider: "ollama",
+      ...base,
+      fetchFn: fn,
+    });
+    expect(out).toBe("hi");
+    expect(seen.url).toContain("/api/generate");
+  });
+
+  test("gemini routes to generateContent with the key header", async () => {
+    const { fn, seen } = capturingFetch({
+      candidates: [{ content: { parts: [{ text: "hello" }] } }],
+    });
+    const out = await translateWithProvider("src", "Tibetan", {
+      provider: "gemini",
+      ...base,
+      fetchFn: fn,
+    });
+    expect(out).toBe("hello");
+    expect(seen.url).toContain("generativelanguage.googleapis.com");
+    expect(seen.url).toContain("gemini-2.5-flash");
+    expect(
+      (seen.init.headers as Record<string, string>)["x-goog-api-key"],
+    ).toBe("test-key-123");
   });
 });

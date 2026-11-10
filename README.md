@@ -2,12 +2,13 @@
 
 A **Sutra Research Study Desk**: open a sutra as a PDF or a batch of page
 images, OCR it from Tibetan or Sanskrit when there is no text layer, and
-translate it with the user's own local Ollama model — all self-hosted, all
-editable, source and translation always side by side.
+translate it — with your own local Ollama model, or with Gemini in the
+cloud — all editable, source and translation always side by side.
 
 Bun + zero dependencies + SQLite. No model is ever downloaded by this desk:
-translation calls the Ollama server you already run, with the model you
-pick in Settings from your installed list.
+Ollama translation calls the Ollama server you already run, with the model
+you pick in Settings from your installed list. Gemini translation calls
+Google's Generative Language API with the key you save in Settings.
 
 ## Run
 
@@ -18,24 +19,33 @@ bun server.ts
 
 `SUTRA_PORT` overrides the port, `SUTRA_DATA` the data directory
 (default `./data`), `OLLAMA_URL` / `OLLAMA_MODEL` seed the Settings
-defaults. The desk binds 127.0.0.1 only.
+defaults, `GEMINI_API_KEY` / `GEMINI_MODEL` seed the Gemini settings.
+The desk binds 127.0.0.1 only.
 
 ## The desk
 
 - **Library**: upload one PDF, or a batch of page images (one page per
   image). Title and OCR language (Tibetan / Sanskrit / both) per document.
-- **Page view**: the page image (or the PDF itself), the source text, the
-  English translation, and notes — every text field is editable and saves
-  on blur.
+- **Layout**: three collapsible panes, iOS-style — Library (uploads,
+  documents, datasources, Settings), Page (the page image or the PDF
+  itself), Study (source text, English translation, notes). Each pane
+  collapses to a narrow rail; the state persists locally. Every text
+  field is editable and saves on blur.
 - **OCR**: per page, via local `tesseract` (`--psm 6`, `bod` / `san`).
   PDFs with a text layer skip OCR entirely: `pdftotext` extracts the
   layer on upload. Scanned PDFs render into per-page PNGs with `pdftoppm`
   ("Render pages"), then OCR per page.
-- **Translate**: per page or whole document, via Ollama `/api/generate`
-  (temperature 0.2, "output only the translation"). Settings holds the
-  Ollama URL and the model, populated from your Ollama's `/api/tags`.
+- **Translate**: per page or whole document, via the provider picked in
+  Settings — Ollama `/api/generate` (temperature 0.2, "output only the
+  translation"), with the URL and model populated from your Ollama's
+  `/api/tags`; or Gemini `generateContent` (temperature 0.2), with the
+  model name and API key saved in Settings. The key is stored in the
+  desk's local database, sent only to Google, and never returned by
+  any endpoint — Settings reports only whether a key is saved. Gemini
+  is a cloud service: page text leaves this machine, unlike Ollama.
 - **Tools status**: the header shows what is installed — tesseract (+
-  its languages), pdftotext, pdftoppm, Ollama reachability. Missing tools
+  its languages), pdftotext, pdftoppm, Ollama reachability, and (when
+  Gemini is the provider) whether a Gemini key is saved. Missing tools
   degrade gracefully: the desk still opens, views, stores and edits
   everything.
 - **Datasources**: browse the UTokyo Database for Sanskrit Manuscripts
@@ -87,7 +97,8 @@ defaults. The desk binds 127.0.0.1 only.
 sudo apt-get install -y tesseract-ocr tesseract-ocr-bod tesseract-ocr-san
 # PDF text extraction + page rendering
 sudo apt-get install -y poppler-utils
-# Translation: any Ollama server with an installed multilingual model
+# Translation: any Ollama server with an installed multilingual model,
+# or a Gemini API key (Settings → Gemini) — no local setup for Gemini
 ```
 
 ## Honest caveats
@@ -104,8 +115,8 @@ sudo apt-get install -y poppler-utils
 
 | Route | Action |
 |---|---|
-| `GET /api/tools` | Installed-tool + Ollama status |
-| `GET/PATCH /api/settings` | Ollama URL + model |
+| `GET /api/tools` | Installed-tool + translation-provider status |
+| `GET/PATCH /api/settings` | Provider, Ollama URL + model, Gemini model + API key (key never returned, presence only) |
 | `GET /api/models` | Models from Ollama `/api/tags` |
 | `GET/POST /api/docs`, `GET/DELETE /api/docs/:id` | Library |
 | `POST /api/docs/:id/render-pages` | PDF → per-page PNGs (pdftoppm) |
@@ -129,5 +140,5 @@ sudo apt-get install -y poppler-utils
 ## Tests
 
 ```sh
-bun test   # 41 tests: db, OCR args, Ollama client with stubbed fetch, IIIF parsing + URL allowlists, BDRC search/volumes/access, corpus catalog/segments/chunking/allowlist/cache, CBETA reference parsing + volume scan
+bun test   # 51 tests: db, OCR args, Ollama client with stubbed fetch, Gemini client + provider dispatch with stubbed fetch, IIIF parsing + URL allowlists, BDRC search/volumes/access, corpus catalog/segments/chunking/allowlist/cache, CBETA reference parsing + volume scan
 ```

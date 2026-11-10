@@ -5,6 +5,8 @@
 // Tibetan/Sanskrit machine translation varies by model, so the desk
 // always keeps source and translation side by side.
 
+import { translateTextGemini } from "./gemini.ts";
+
 export function buildPrompt(text: string, langLabel: string): string {
   return (
     `Translate the following ${langLabel} text into English. ` +
@@ -67,4 +69,34 @@ export async function listModels(
   if (!res.ok) throw new Error(`Ollama returned ${res.status} for /api/tags.`);
   const data = (await res.json()) as { models?: { name: string }[] };
   return (data.models ?? []).map((m) => m.name);
+}
+
+// Provider dispatch: the desk translates with the provider the user
+// picked in Settings — their local Ollama, or Gemini in the cloud.
+// The caller checks that the provider is actually configured (model
+// picked for Ollama, API key saved for Gemini) before calling this.
+export interface ProviderOpts {
+  provider: "ollama" | "gemini";
+  ollama: { url: string; model: string };
+  gemini: { apiKey: string; model: string };
+  fetchFn?: typeof fetch;
+}
+
+export async function translateWithProvider(
+  text: string,
+  langLabel: string,
+  opts: ProviderOpts,
+): Promise<string> {
+  if (opts.provider === "gemini") {
+    return translateTextGemini(text, langLabel, {
+      apiKey: opts.gemini.apiKey,
+      model: opts.gemini.model,
+      fetchFn: opts.fetchFn,
+    });
+  }
+  return translateText(text, langLabel, {
+    url: opts.ollama.url,
+    model: opts.ollama.model,
+    fetchFn: opts.fetchFn,
+  });
 }

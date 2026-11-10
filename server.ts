@@ -33,7 +33,7 @@ import {
   pdfPageCount,
   renderPdfPages,
 } from "./src/ocr.ts";
-import { translateText, listModels } from "./src/translate.ts";
+import { listModels, translateWithProvider } from "./src/translate.ts";
 import {
   COLLECTION_URL,
   IMPORT_WIDTH,
@@ -129,6 +129,46 @@ function ollamaModel(): string {
   return getSetting(db, "ollama_model", process.env.OLLAMA_MODEL || "");
 }
 
+// Translation provider: "ollama" (local, default) or "gemini" (cloud).
+// The Gemini key is stored in the local settings table and is NEVER
+// returned by any GET endpoint — only its presence (gemini_key_set).
+function translateProvider(): "ollama" | "gemini" {
+  const p = getSetting(db, "translate_provider", "ollama");
+  return p === "gemini" ? "gemini" : "ollama";
+}
+
+function geminiKey(): string {
+  return getSetting(db, "gemini_api_key", process.env.GEMINI_API_KEY || "");
+}
+
+function geminiModel(): string {
+  return getSetting(db, "gemini_model", process.env.GEMINI_MODEL || "gemini-2.5-flash");
+}
+
+async function translatePageText(text: string, lang: string): Promise<string> {
+  const provider = translateProvider();
+  if (provider === "gemini") {
+    const key = geminiKey();
+    if (!key) {
+      throw new Error("No Gemini API key saved — add one in Settings.");
+    }
+    return translateWithProvider(text, lang, {
+      provider,
+      ollama: { url: ollamaUrl(), model: ollamaModel() },
+      gemini: { apiKey: key, model: geminiModel() },
+    });
+  }
+  const model = ollamaModel();
+  if (!model) {
+    throw new Error("No Ollama model selected — pick one in Settings.");
+  }
+  return translateWithProvider(text, lang, {
+    provider,
+    ollama: { url: ollamaUrl(), model },
+    gemini: { apiKey: geminiKey(), model: geminiModel() },
+  });
+}
+
 async function toolsStatus() {
   const [tess, pdftotext, pdftoppm, pdfinfo, langs] = await Promise.all([
     toolAvailable("tesseract"),
@@ -153,12 +193,19 @@ async function toolsStatus() {
     ollama_url: ollamaUrl(),
     ollama_ok: ollamaOk,
     ollama_model: ollamaModel(),
+    translate_provider: translateProvider(),
+    gemini_key_set: geminiKey() !== "",
+    gemini_model: geminiModel(),
   };
 }
 
 Bun.serve({
   port: PORT,
   hostname: "127.0.0.1",
+  // Cloud translation calls (Gemini) can take longer than Bun's 10s
+  // default idle timeout; the language-tutor desk sets 30 for the
+  // same reason.
+  idleTimeout: 30,
   async fetch(req) {
     const url = new URL(req.url);
     const path = url.pathname;
@@ -194,7 +241,14 @@ Bun.serve({
         return json(await toolsStatus());
       }
       if (method === "GET" && path === "/api/settings") {
-        return json({ ollama_url: ollamaUrl(), ollama_model: ollamaModel() });
+        // The Gemini key is never returned — only whether one is saved.
+        return json({
+          ollama_url: ollamaUrl(),
+          ollama_model: ollamaModel(),
+          translate_provider: translateProvider(),
+          gemini_model: geminiModel(),
+          gemini_key_set: geminiKey() !== "",
+        });
       }
       if (method === "PATCH" && path === "/api/settings") {
         const body = await readJson(req);
@@ -204,7 +258,25 @@ Bun.serve({
         if (typeof body.ollama_model === "string") {
           setSetting(db, "ollama_model", body.ollama_model.trim());
         }
-        return json({ ollama_url: ollamaUrl(), ollama_model: ollamaModel() });
+        if (typeof body.translate_provider === "string" &&
+            (body.translate_provider === "ollama" || body.translate_provider === "gemini")) {
+          setSetting(db, "translate_provider", body.translate_provider);
+        }
+        if (typeof body.gemini_model === "string" && body.gemini_model.trim()) {
+          setSetting(db, "gemini_model", body.gemini_model.trim());
+        }
+        if (typeof body.gemini_api_key === "string") {
+          // Empty string clears the saved key; a non-empty value
+          // replaces it. The key is stored locally, never echoed back.
+          setSetting(db, "gemini_api_key", body.gemini_api_key.trim());
+        }
+        return json({
+          ollama_url: ollamaUrl(),
+          ollama_model: ollamaModel(),
+          translate_provider: translateProvider(),
+          gemini_model: geminiModel(),
+          gemini_key_set: geminiKey() !== "",
+        });
       }
       if (method === "GET" && path === "/api/models") {
         try {
@@ -827,19 +899,16 @@ Bun.serve({
         if (!page.source_text.trim()) {
           return json({ error: "No source text on this page — OCR or extract it first." }, 400);
         }
-        const model = ollamaModel();
-        if (!model) {
-          return json({ error: "No Ollama model selected — pick one in Settings." }, 400);
-        }
         try {
-          const out = await translateText(page.source_text, langLabel(doc.ocr_lang), {
-            url: ollamaUrl(),
-            model,
-          });
+          const out = await translatePageText(page.source_text, langLabel(doc.ocr_lang));
           updatePage(db, id, pageNo, { translation: out });
           return json({ page: getPage(db, id, pageNo) });
         } catch (e) {
-          return json({ error: (e as Error).message }, 502);
+          const msg = (e as Error).message;
+          const status = msg.startsWith("No Ollama model") || msg.startsWith("No Gemini API key")
+            ? 400
+            : 502;
+          return json({ error: msg }, status);
         }
       }
 
@@ -848,19 +917,12 @@ Bun.serve({
         const id = Number(trAllMatch[1]);
         const doc = getDoc(db, id);
         if (!doc) return json({ error: "Document not found." }, 404);
-        const model = ollamaModel();
-        if (!model) {
-          return json({ error: "No Ollama model selected — pick one in Settings." }, 400);
-        }
         let done = 0;
         const errors: string[] = [];
         for (const page of getPages(db, id)) {
           if (!page.source_text.trim()) continue;
           try {
-            const out = await translateText(page.source_text, langLabel(doc.ocr_lang), {
-              url: ollamaUrl(),
-              model,
-            });
+            const out = await translatePageText(page.source_text, langLabel(doc.ocr_lang));
             updatePage(db, id, page.page_no, { translation: out });
             done++;
           } catch (e) {
