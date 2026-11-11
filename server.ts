@@ -899,12 +899,17 @@ Bun.serve({
         if (!page.source_text.trim()) {
           return json({ error: "No source text on this page — OCR or extract it first." }, 400);
         }
+        // Logged so a stalled translate is visible in the terminal:
+        // the request arriving here with no completion line means the
+        // provider call itself is hanging.
+        console.log(`translate doc ${id} page ${pageNo} via ${translateProvider()}`);
         try {
           const out = await translatePageText(page.source_text, langLabel(doc.ocr_lang));
           updatePage(db, id, pageNo, { translation: out });
           return json({ page: getPage(db, id, pageNo) });
         } catch (e) {
           const msg = (e as Error).message;
+          console.error(`translate doc ${id} page ${pageNo} failed: ${msg}`);
           const status = msg.startsWith("No Ollama model") || msg.startsWith("No Gemini API key")
             ? 400
             : 502;
@@ -917,6 +922,7 @@ Bun.serve({
         const id = Number(trAllMatch[1]);
         const doc = getDoc(db, id);
         if (!doc) return json({ error: "Document not found." }, 404);
+        console.log(`translate-all doc ${id} via ${translateProvider()}`);
         let done = 0;
         const errors: string[] = [];
         for (const page of getPages(db, id)) {
@@ -929,6 +935,7 @@ Bun.serve({
             errors.push(`page ${page.page_no}: ${(e as Error).message}`);
           }
         }
+        if (errors.length) console.error(`translate-all doc ${id} errors: ${errors.join("; ")}`);
         return json({ translated: done, errors });
       }
 

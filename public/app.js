@@ -43,7 +43,12 @@ function showMsg(text, isErr = false) {
   msgEl.textContent = text;
   msgEl.className = isErr ? "err" : "ok";
   clearTimeout(showMsg._t);
-  showMsg._t = setTimeout(() => { msgEl.textContent = ""; }, 6000);
+  // Errors persist until the next message: a 6s auto-clear let a failed
+  // translate vanish before anyone read it ("nothing happens").
+  // Success notes still clear after 6s.
+  if (!isErr) {
+    showMsg._t = setTimeout(() => { msgEl.textContent = ""; }, 6000);
+  }
 }
 
 async function api(path, opts = {}) {
@@ -215,12 +220,15 @@ function renderDesk() {
   const trAll = document.createElement("button");
   trAll.textContent = "Translate all pages";
   trAll.onclick = async () => {
+    const label = trAll.textContent;
     trAll.disabled = true;
+    trAll.textContent = "Translating…";
     try {
       const data = await api(`/api/docs/${doc.id}/translate-all`, { method: "POST" });
       showMsg(`Translated ${data.translated} page(s).` + (data.errors.length ? ` Errors: ${data.errors.join("; ")}` : ""));
       await openDoc(doc.id);
     } catch (e) { showMsg(e.message, true); }
+    trAll.textContent = label;
     trAll.disabled = false;
   };
   nav.append(trAll);
@@ -322,13 +330,16 @@ function renderDesk() {
   trBtn.textContent = `Translate this page (${settings.translate_provider === "gemini" ? "Gemini" : "Ollama"})`;
   trBtn.className = "primary";
   trBtn.onclick = async () => {
+    const label = trBtn.textContent;
     trBtn.disabled = true;
+    trBtn.textContent = "Translating…";
     try {
       const data = await api(`/api/docs/${doc.id}/pages/${page.page_no}/translate`, { method: "POST" });
       cur.pages[pageIdx] = data.page;
       renderDesk();
       showMsg("Translated.");
     } catch (e) { showMsg(e.message, true); }
+    trBtn.textContent = label;
     trBtn.disabled = false;
   };
   study.append(trBtn);
