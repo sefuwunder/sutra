@@ -8,11 +8,47 @@ let pageIdx = 0;
 let tools = null;
 let settings = { translate_provider: "ollama", gemini_key_set: false, gemini_model: "gemini-2.5-flash" };
 
+// Study view: pretty font + collapsible Source/Translation sections.
+// Persisted in localStorage like the pane state.
+let prettyFont = false;
+let srcCollapsed = false;
+let trCollapsed = false;
+try {
+  prettyFont = localStorage.getItem("sutra-pretty") === "1";
+  srcCollapsed = localStorage.getItem("sutra-src-collapsed") === "1";
+  trCollapsed = localStorage.getItem("sutra-tr-collapsed") === "1";
+} catch { /* private mode: view state just doesn't persist */ }
+
+function saveStudyView() {
+  try {
+    localStorage.setItem("sutra-pretty", prettyFont ? "1" : "0");
+    localStorage.setItem("sutra-src-collapsed", srcCollapsed ? "1" : "0");
+    localStorage.setItem("sutra-tr-collapsed", trCollapsed ? "1" : "0");
+  } catch { /* ignore */ }
+}
+
+// A collapsible section: header button (chevron + label) + body.
+// Returns { sec, body }; the caller fills body, then appends sec.
+function makeSection(label, collapsed, onToggle) {
+  const sec = document.createElement("div");
+  sec.className = "section" + (collapsed ? " collapsed" : "");
+  const head = document.createElement("button");
+  head.className = "section-head";
+  head.textContent = (collapsed ? "\u25b8 " : "\u25be ") + label;
+  head.onclick = onToggle;
+  sec.append(head);
+  const body = document.createElement("div");
+  body.className = "section-body";
+  sec.append(body);
+  return { sec, body };
+}
+
 function viewerEl() { return $("viewer"); }
 function studyEl() { return $("study"); }
 
 function emptyStudy() {
   const s = studyEl();
+  s.className = "pane-body";
   s.replaceChildren();
   const p = document.createElement("p");
   p.className = "empty";
@@ -114,6 +150,14 @@ function setProvider(p) {
   }
   $("set-ollama").hidden = p !== "ollama";
   $("set-gemini").hidden = p !== "gemini";
+  // Keep the translate button's provider label live. A full renderDesk()
+  // here would drop un-blurred edits in the study textareas; the in-flight
+  // "Translating…" label is left alone (it doesn't start with the prefix).
+  for (const b of studyEl().querySelectorAll("button")) {
+    if (b.textContent.startsWith("Translate this page")) {
+      b.textContent = `Translate this page (${p === "gemini" ? "Gemini" : "Ollama"})`;
+    }
+  }
 }
 
 function updateGeminiKeyStatus(isSet) {
@@ -273,14 +317,24 @@ function renderDesk() {
     study.append(ref);
   }
 
-  const srcLabel = document.createElement("h3");
-  srcLabel.textContent = `Source text (${page.source_kind === "none" ? "empty" : page.source_kind})`;
-  study.append(srcLabel);
+  // Study pane: pretty-font toggle, collapsible Source and Translation.
+  study.className = "pane-body" + (prettyFont ? " pretty" : "");
+  const toolbar = document.createElement("div");
+  toolbar.className = "study-toolbar";
+  const prettyBtn = document.createElement("button");
+  prettyBtn.className = "mini" + (prettyFont ? " on" : "");
+  prettyBtn.textContent = "Aa";
+  prettyBtn.title = "Pretty font view";
+  prettyBtn.onclick = () => { prettyFont = !prettyFont; saveStudyView(); renderDesk(); };
+  toolbar.append(prettyBtn);
+  study.append(toolbar);
+
+  const srcSec = makeSection(`Source text (${page.source_kind === "none" ? "empty" : page.source_kind})`, srcCollapsed, () => { srcCollapsed = !srcCollapsed; saveStudyView(); renderDesk(); });
   const src = document.createElement("textarea");
   src.className = "source";
   src.value = page.source_text;
   src.onblur = () => savePage(page, { source_text: src.value });
-  study.append(src);
+  srcSec.body.append(src);
 
   const row = document.createElement("div");
   row.className = "nav";
@@ -316,21 +370,19 @@ function renderDesk() {
     note.textContent = "No image on this page — render the PDF into pages to OCR per page.";
     row.append(note);
   }
-  study.append(row);
+  srcSec.body.append(row);
+  study.append(srcSec.sec);
 
-  const trLabel = document.createElement("h3");
-  trLabel.textContent = "Translation (English — editable)";
-  study.append(trLabel);
+  const trSec = makeSection("Translation (English — editable)", trCollapsed, () => { trCollapsed = !trCollapsed; saveStudyView(); renderDesk(); });
   const tr = document.createElement("textarea");
   tr.className = "translation";
   tr.value = page.translation;
   tr.onblur = () => savePage(page, { translation: tr.value });
-  study.append(tr);
+  trSec.body.append(tr);
   const trBtn = document.createElement("button");
   trBtn.textContent = `Translate this page (${settings.translate_provider === "gemini" ? "Gemini" : "Ollama"})`;
   trBtn.className = "primary";
   trBtn.onclick = async () => {
-    const label = trBtn.textContent;
     trBtn.disabled = true;
     trBtn.textContent = "Translating…";
     try {
@@ -339,10 +391,11 @@ function renderDesk() {
       renderDesk();
       showMsg("Translated.");
     } catch (e) { showMsg(e.message, true); }
-    trBtn.textContent = label;
+    trBtn.textContent = `Translate this page (${settings.translate_provider === "gemini" ? "Gemini" : "Ollama"})`;
     trBtn.disabled = false;
   };
-  study.append(trBtn);
+  trSec.body.append(trBtn);
+  study.append(trSec.sec);
 
   const nLabel = document.createElement("h3");
   nLabel.textContent = "Notes";

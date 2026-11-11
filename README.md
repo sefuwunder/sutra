@@ -140,5 +140,6 @@ sudo apt-get install -y poppler-utils
 ## Tests
 
 ```sh
-bun test   # 51 tests: db, OCR args, Ollama client with stubbed fetch, Gemini client + provider dispatch with stubbed fetch, IIIF parsing + URL allowlists, BDRC search/volumes/access, corpus catalog/segments/chunking/allowlist/cache, CBETA reference parsing + volume scan
+bun test               # 51 tests: db, OCR args, Ollama client with stubbed fetch, Gemini client + provider dispatch with stubbed fetch, IIIF parsing + URL allowlists, BDRC search/volumes/access, corpus catalog/segments/chunking/allowlist/cache, CBETA reference parsing + volume scan
+node scripts/dom-check.mjs   # DOM-stubbed render check: parses the real index.html, evals the real app.js with a stubbed fetch, asserts live DOM state (pretty font, collapsible sections, provider switch, failed-translate feedback)
 ```
